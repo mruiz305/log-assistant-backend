@@ -1,0 +1,144 @@
+{
+  "version": "v1",
+  "table": "performance_data.dmLogReportDashboard",
+  "readOnly": true,
+  "datasetTruths": [
+    "This table is current-state (not historical): each idLead appears once and represents the latest state.",
+    "Ignore snapshotDate if present; do not use it.",
+    "Confirmed=1 means the case is confirmed and counts as converted (CNV / Case Converted).",
+    "Status is operational health and does not invalidate conversion."
+  ],
+  "concepts": {
+    "conversion_credit": {
+      "name": "Conversion / Credit (CNV)",
+      "definition": "Business credit for a case. Determined by Confirmed.",
+      "primaryField": "Confirmed",
+      "kpi": {
+        "name": "CNV",
+        "sql": "SUM(CASE WHEN Confirmed=1 THEN 1 ELSE 0 END)"
+      }
+    },
+    "operational_health": {
+      "name": "Operational Health",
+      "definition": "Follow-up health classification for monitoring. Determined by Status and related drivers.",
+      "primaryField": "Status",
+      "drivers": ["ClinicalStatus", "Visits", "Compliance", "ldot", "dateDropped"]
+    }
+  },
+  "intentMap": [
+    { "keywords": ["cnv", "converted", "case converted", "confirmados", "convertidos"], "use": ["Confirmed"] },
+    { "keywords": ["dropped", "drop", "problem", "problem >30", "dropped >60"], "use": ["Status"] },
+    { "keywords": ["clinical dropped", "clinically dropped", "clínicamente", "ClinicalStatus"], "use": ["ClinicalStatus"] },
+    { "keywords": ["confirmados con problemas", "converted with problems"], "use": ["Confirmed", "Status"] }
+  ],
+  "fields": {
+    "idLead": {
+      "type": "int",
+      "description": "Primary case/lead identifier. Unique per row in current-state dataset.",
+      "role": "primary_key"
+    },
+    "idLeadOld": {
+      "type": "int",
+      "description": "Legacy lead identifier from older system(s). Not a primary key.",
+      "role": "legacy_reference"
+    },
+    "Status": {
+      "type": "string",
+      "description": "Derived operational health classification used for follow-up monitoring (not credit).",
+      "examples": ["ACTIVE", "REF OUT", "DROPPED", "PROBLEM", "PROBLEM >30", "DROPPED >60", "N/A"],
+      "rules": [
+        "Use Status (not leadStatus) for dropped/problem reporting.",
+        "Status does not remove conversion credit."
+      ],
+      "filters": {
+        "dropped_any": "Status LIKE '%DROP%'",
+        "dropped_gt_60": "Status LIKE '%DROPPED%' AND Status LIKE '%60%'",
+        "problem_any": "Status LIKE '%PROBLEM%'",
+        "problem_gt_30": "Status LIKE '%PROBLEM%' AND Status LIKE '%30%'"
+      }
+    },
+    "LegalStatus": {
+      "type": "string",
+      "description": "Legal pipeline status or disposition label. Can coexist with different Status values."
+    },
+    "ClinicalStatus": {
+      "type": "string",
+      "description": "Clinical/treatment status label. Used for clinical leakage and health drivers.",
+      "examples": ["ACTIVE", "REF OUT", "FINALIZED", "SETTLED", "DROPPED", "PAUSED", "RISK99", "N/A"],
+      "filters": {
+        "clinical_dropped": "ClinicalStatus LIKE '%DROP%'"
+      }
+    },
+    "Confirmed": {
+      "type": "tinyint",
+      "description": "Conversion credit flag. 1 = confirmed/converted (counts for CNV / Case Converted).",
+      "values": { "0": "Not confirmed", "1": "Confirmed (converted credit)" },
+      "rules": [
+        "Confirmed=1 counts as converted regardless of Status/ClinicalStatus."
+      ]
+    },
+    "convertedValue": {
+      "type": "decimal",
+      "description": "Weighted conversion score (0..1). Use only if user requests weighted/score-based conversion.",
+      "examples": [0, 0.3, 0.33, 0.5, 0.75, 1]
+    },
+    "Visits": {
+      "type": "int",
+      "description": "Number of clinical visits. May be NULL (unknown/not loaded).",
+      "nullMeaning": "No visit data available",
+      "ruleOfUse": "Use COALESCE(Visits,0) only when numeric computations are required."
+    },
+    "dateCameIn": {
+      "type": "date",
+      "description": "Primary date for volume/trend analysis unless user specifies a different date."
+    },
+    "dateDropped": {
+      "type": "date",
+      "description": "Date the case was dropped/closed operationally (when applicable)."
+    },
+    "idot": { "type": "string_or_date", "description": "Intake date (IDOT). Format may be string; treat carefully in SQL." },
+    "ldot": { "type": "string_or_date", "description": "Last date of treatment (LDOT). Format may be string; treat carefully in SQL." },
+    "Signed": { "type": "string_or_date", "description": "Signed date (legal milestone). Format may be string; treat carefully in SQL." },
+    "doa": { "type": "string_or_date", "description": "Date of accident (DOA). Format may be string; treat carefully in SQL." },
+
+    "submitter": { "type": "string", "description": "Submitter/source raw value." },
+    "submitterName": { "type": "string", "description": "Submitter display name; may be blank, Is the marketin representative." },
+
+    "name": { "type": "string", "description": "Client name." },
+    "attorney": { "type": "string", "description": "Attorney assigned." },
+    "intakeSpecialist": { "type": "string", "description": "intakeSpecialist es quien conecto el caso con los abogados y la clinica medica." },
+
+    "RegionName": { "type": "string", "description": "Region grouping name." },
+    "OfficeName": { "type": "string", "description": "Office grouping name." },
+    "PODEName": { "type": "string", "description": "POD grouping name." },
+    "TeamName": { "type": "string", "description": "Team grouping name." },
+    "officeLabel": { "type": "string", "description": "Office label string used for reporting." },
+
+    "accidentState": { "type": "string", "description": "State where accident occurred." },
+    "formattedPhoneEntry": { "type": "string", "description": "Formatted phone value used in reports." },
+
+    "pipInsurance": { "type": "string", "description": "PIP insurance name/carrier." },
+    "atfaultInsurance": { "type": "string", "description": "At-fault insurance name/carrier." },
+    "txLocation": { "type": "string", "description": "Treatment location." },
+
+    "Compliance": { "type": "string", "description": "Compliance label/flag used by operations." },
+    "AttyDropReason": { "type": "string", "description": "Attorney drop reason label." },
+    "leadNotes": { "type": "string", "description": "Free-text notes. Not reliable for strict metrics." },
+
+    "DirectorEmail": { "type": "string" },
+    "RegionEmail": { "type": "string" },
+    "OfficeEmail": { "type": "string" },
+    "PODEmail": { "type": "string" },
+    "TeamEmail": { "type": "string" },
+    "DirectorName": { "type": "string" }
+  },
+  "sqlRules": {
+    "onlySelect": true,
+    "noLimit": true,
+    "onlyFullGroupBy": true,
+    "avoidDateFormatYM": true,
+    "monthGrouping": "Use YEAR(dateCameIn), MONTH(dateCameIn)",
+    "noInventedColumns": true,
+    "submitterProjectionWhenRequested": "TRIM(COALESCE(NULLIF(submitterName,''), submitter)) AS submitter"
+  }
+}
