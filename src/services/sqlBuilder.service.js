@@ -11,59 +11,189 @@ function normalizeText(s = '') {
     .replace(/[\u0300-\u036f]/g, ''); // quita acentos
 }
 
-function extractTimeWindow(question, uiLang = 'en') {
+function extractTimeWindow(question, uiLang = 'en', opts = {}) {
   const q = normalizeText(question);
 
-  // defaults
+  // defaults: NO asumir
   let where = '';
   let label = uiLang === 'es' ? 'sin filtro de tiempo' : 'no time filter';
 
+  // =========================
+  // HOY
+  // =========================
+  if (q.includes('hoy') || q.includes('today')) {
+    return {
+      where: `WHERE dateCameIn >= CURDATE() AND dateCameIn < DATE_ADD(CURDATE(), INTERVAL 1 DAY)`,
+      label: uiLang === 'es' ? 'hoy' : 'today',
+    };
+  }
+
+  // =========================
+  // ESTA SEMANA (Lun..Dom)
+  // =========================
+  if (q.includes('esta semana') || q.includes('this week')) {
+    return {
+      where: `WHERE dateCameIn >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)
+             AND dateCameIn < DATE_ADD(DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY), INTERVAL 7 DAY)`,
+      label: uiLang === 'es' ? 'esta semana' : 'this week',
+    };
+  }
+
+  // =========================
   // DÍAS: "ultimos 30 dias", "last 30 days"
+  // =========================
   const mDaysEs = q.match(/ultim(?:os|as)\s+(\d{1,3})\s+dias?/);
   const mDaysEn = q.match(/last\s+(\d{1,3})\s+days?/);
   const mDays = mDaysEs || mDaysEn;
   if (mDays) {
     const n = parseInt(mDays[1], 10);
     if (!Number.isNaN(n) && n > 0) {
-      where = `WHERE dateCameIn >= DATE_SUB(CURDATE(), INTERVAL ${n} DAY)`;
-      label = uiLang === 'es' ? `últimos ${n} días` : `last ${n} days`;
-      return { where, label };
+      return {
+        where: `WHERE dateCameIn >= DATE_SUB(CURDATE(), INTERVAL ${n} DAY)`,
+        label: uiLang === 'es' ? `últimos ${n} días` : `last ${n} days`,
+      };
     }
   }
 
+  // =========================
   // MESES: "ultimos 3 meses", "last 3 months"
+  // =========================
   const mMonthsEs = q.match(/ultim(?:os|as)\s+(\d{1,2})\s+mes(?:es)?/);
   const mMonthsEn = q.match(/last\s+(\d{1,2})\s+months?/);
   const mMonths = mMonthsEs || mMonthsEn;
   if (mMonths) {
     const n = parseInt(mMonths[1], 10);
     if (!Number.isNaN(n) && n > 0) {
-      where = `WHERE dateCameIn >= DATE_SUB(CURDATE(), INTERVAL ${n} MONTH)`;
-      label = uiLang === 'es' ? `últimos ${n} meses` : `last ${n} months`;
-      return { where, label };
+      return {
+        where: `WHERE dateCameIn >= DATE_SUB(CURDATE(), INTERVAL ${n} MONTH)`,
+        label: uiLang === 'es' ? `últimos ${n} meses` : `last ${n} months`,
+      };
     }
   }
 
-  // "ultimo mes" / "last month"
-  if (q.includes('ultimo mes') || q.includes('último mes') || q.includes('last month')) {
-    where = `WHERE dateCameIn >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)`;
-    label = uiLang === 'es' ? 'último mes' : 'last month';
-    return { where, label };
+  // =========================
+  // ESTE MES (calendario)
+  // =========================
+  if (q.includes('este mes') || q.includes('this month') || q.includes('current month')) {
+    return {
+      where: `WHERE dateCameIn >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+             AND dateCameIn < DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 1 MONTH)`,
+      label: uiLang === 'es' ? 'este mes' : 'this month',
+    };
   }
 
-  // "este mes" / "this month"
-  if (q.includes('este mes') || q.includes('this month')) {
-    where = `WHERE dateCameIn >= DATE_FORMAT(CURDATE(), '%Y-%m-01')`;
-    label = uiLang === 'es' ? 'este mes' : 'this month';
-    return { where, label };
+  // =========================
+  // ÚLTIMO MES (mes calendario anterior)
+  // =========================
+  if (q.includes('ultimo mes') || q.includes('último mes') || q.includes('last month')) {
+    return {
+      where: `WHERE dateCameIn >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01')
+             AND dateCameIn < DATE_FORMAT(CURDATE(), '%Y-%m-01')`,
+      label: uiLang === 'es' ? 'último mes' : 'last month',
+    };
+  }
+
+  // =========================
+  // AÑO PASADO (calendario)
+  // =========================
+  if (q.includes('ano pasado') || q.includes('año pasado') || q.includes('last year')) {
+    return {
+      where: `WHERE dateCameIn >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 YEAR), '%Y-01-01')
+             AND dateCameIn < DATE_FORMAT(CURDATE(), '%Y-01-01')`,
+      label: uiLang === 'es' ? 'año pasado' : 'last year',
+    };
+  }
+
+  // =========================
+  // AÑO ACTUAL
+  // =========================
+  if (q.includes('este ano') || q.includes('este año') || q.includes('this year') || q.includes('current year')) {
+    return {
+      where: `WHERE dateCameIn >= DATE_FORMAT(CURDATE(), '%Y-01-01')
+             AND dateCameIn < DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-01-01'), INTERVAL 1 YEAR)`,
+      label: uiLang === 'es' ? 'año actual' : 'current year',
+    };
+  }
+
+  // =========================
+  // RANGO ISO: YYYY-MM-DD ... YYYY-MM-DD
+  // =========================
+  const mRangeIso = q.match(
+    /\b(19\d{2}|20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b.*\b(19\d{2}|20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/
+  );
+  if (mRangeIso) {
+    const start = `${mRangeIso[1]}-${mRangeIso[2]}-${mRangeIso[3]}`;
+    const end = `${mRangeIso[4]}-${mRangeIso[5]}-${mRangeIso[6]}`;
+    return {
+      where: `WHERE dateCameIn >= DATE('${start}')
+             AND dateCameIn < DATE_ADD(DATE('${end}'), INTERVAL 1 DAY)`,
+      label: uiLang === 'es' ? `rango ${start} a ${end}` : `range ${start} to ${end}`,
+    };
+  }
+
+  // =========================
+  // RANGO US: MM/DD/YYYY ... MM/DD/YYYY
+  // =========================
+  const mRangeUs = q.match(
+    /\b(0?[1-9]|1[0-2])\/(0?[1-9]|[12]\d|3[01])\/(19\d{2}|20\d{2})\b.*\b(0?[1-9]|1[0-2])\/(0?[1-9]|[12]\d|3[01])\/(19\d{2}|20\d{2})\b/
+  );
+  if (mRangeUs) {
+    const start = `${mRangeUs[3]}-${String(mRangeUs[1]).padStart(2, '0')}-${String(mRangeUs[2]).padStart(2, '0')}`;
+    const end = `${mRangeUs[6]}-${String(mRangeUs[4]).padStart(2, '0')}-${String(mRangeUs[5]).padStart(2, '0')}`;
+    return {
+      where: `WHERE dateCameIn >= DATE('${start}')
+             AND dateCameIn < DATE_ADD(DATE('${end}'), INTERVAL 1 DAY)`,
+      label: uiLang === 'es' ? `rango ${start} a ${end}` : `range ${start} to ${end}`,
+    };
+  }
+
+  // =========================
+  // TRIMESTRE: Q1 2025 (Q2, Q3, Q4)
+  // =========================
+  const mQuarter = q.match(/\bq([1-4])\s*(19\d{2}|20\d{2})\b/);
+  if (mQuarter) {
+    const qNum = parseInt(mQuarter[1], 10);
+    const yNum = parseInt(mQuarter[2], 10);
+    const startMonth = (qNum - 1) * 3 + 1; // 1,4,7,10
+    const start = `${yNum}-${String(startMonth).padStart(2, '0')}-01`;
+    return {
+      where: `WHERE dateCameIn >= DATE('${start}')
+             AND dateCameIn < DATE_ADD(DATE('${start}'), INTERVAL 3 MONTH)`,
+      label: uiLang === 'es' ? `trimestre ${qNum} ${yNum}` : `Q${qNum} ${yNum}`,
+    };
+  }
+
+  // =========================
+  // AÑO ESPECÍFICO: 2025
+  // =========================
+  const mYear = q.match(/\b(19\d{2}|20\d{2})\b/);
+  if (mYear) {
+    const y = parseInt(mYear[1], 10);
+    return {
+      where: `WHERE dateCameIn >= DATE('${y}-01-01')
+             AND dateCameIn < DATE('${y + 1}-01-01')`,
+      label: uiLang === 'es' ? `año ${y}` : `year ${y}`,
+    };
+  }
+
+  // =========================
+  // ✅ FALLBACK OPCIONAL (NO asumir salvo que lo pidas)
+  // =========================
+  const fallbackDays = Number(opts.defaultWindowDays || 0);
+  if (!Number.isNaN(fallbackDays) && fallbackDays > 0) {
+    return {
+      where: `WHERE dateCameIn >= DATE_SUB(CURDATE(), INTERVAL ${fallbackDays} DAY)`,
+      label: uiLang === 'es' ? `últimos ${fallbackDays} días` : `last ${fallbackDays} days`,
+    };
   }
 
   return { where, label };
 }
 
-function tryGoldenTemplate(question, intent, uiLang = 'en') {
+
+function tryGoldenTemplate(question, intent, uiLang = 'en', opts = {}) {
   const q = normalizeText(question);
-  const { where, label } = extractTimeWindow(question, uiLang);
+  const { where, label } = extractTimeWindow(question, uiLang, opts);
 
   const has = (...words) => words.some((w) => q.includes(normalizeText(w)));
 
@@ -384,7 +514,7 @@ Return only the requested JSON.
 `.trim();
 }
 
-async function buildSqlFromQuestion(question, uiLang = 'en') {
+async function buildSqlFromQuestion(question, uiLang = 'en', opts = {}) {
   const lang = uiLang === 'es' ? 'es' : 'en';
 
   const schemaDescription = buildSchemaDescription(lang);
@@ -392,7 +522,7 @@ async function buildSqlFromQuestion(question, uiLang = 'en') {
   const intent = classifyIntent(question);
 
   // ✅ Golden template fallback (no OpenAI call)
-  const golden = tryGoldenTemplate(question, intent, lang);
+ const golden = tryGoldenTemplate(question, intent, lang, opts);
   if (golden) return golden;
 
   const prompt = buildUserPrompt(question, intent, lang);

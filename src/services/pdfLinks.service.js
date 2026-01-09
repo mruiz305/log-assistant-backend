@@ -4,6 +4,7 @@ function wantsPdfLinks(message = '') {
   );
 }
 
+
 function normalizeText(s = '') {
   return String(s || '')
     .toLowerCase()
