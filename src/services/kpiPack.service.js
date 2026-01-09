@@ -2,6 +2,8 @@
    KPI Pack SQL Builder (Time Window + Person filter)
    - 1 fila con KPIs
    - Usa dateCameIn como fecha principal
+   - NO asume 90 días por defecto
+   - Si NO detecta rango de tiempo => matched=false y NO aplica WHERE de tiempo
    - Soporta rangos: hoy, esta semana, este mes, último mes, año actual, año pasado,
      año específico (2025), mes+año (marzo 2025 / 03/2025), mes solo (marzo),
      últimos N días/meses, trimestre (Q1 2025), rango explícito (YYYY-MM-DD ... YYYY-MM-DD)
@@ -34,7 +36,8 @@ function makeLabel(kind, a, b, lang = 'es') {
     case 'days': return es ? `últimos ${a} días` : `last ${a} days`;
     case 'months': return es ? `últimos ${a} meses` : `last ${a} months`;
     case 'quarters': return es ? `trimestre ${a} ${b}` : `Q${a} ${b}`;
-    default: return es ? 'últimos 90 días' : 'last 90 days';
+    case 'no_time': return es ? 'sin filtro de tiempo' : 'no time filter';
+    default: return es ? 'sin filtro de tiempo' : 'no time filter';
   }
 }
 
@@ -64,21 +67,24 @@ function monthLabel(num, lang = 'es') {
 }
 
 /**
- * Devuelve { where, label }
+ * Devuelve { where, label, matched }
  * where incluye "WHERE ..." listo para usar.
+ * - matched=false => no se pudo interpretar rango (no inventa 90d)
  */
 function extractTimeWindow(question, lang = 'es') {
   const q = normalizeText(question);
 
-  // Default: 90 días
-  let where = `WHERE dateCameIn >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)`;
-  let label = makeLabel('default', 90, null, lang);
+  // Default: sin filtro (NO ASUMIR)
+  let where = '';
+  let label = makeLabel('no_time', null, null, lang);
+  let matched = false;
 
   // Hoy
   if (q.includes('hoy') || q.includes('today')) {
     return {
       where: `WHERE dateCameIn >= CURDATE() AND dateCameIn < DATE_ADD(CURDATE(), INTERVAL 1 DAY)`,
       label: makeLabel('today', 0, null, lang),
+      matched: true,
     };
   }
 
@@ -88,6 +94,7 @@ function extractTimeWindow(question, lang = 'es') {
       where: `WHERE dateCameIn >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)
              AND dateCameIn < DATE_ADD(DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY), INTERVAL 7 DAY)`,
       label: makeLabel('this_week', 0, null, lang),
+      matched: true,
     };
   }
 
@@ -97,6 +104,7 @@ function extractTimeWindow(question, lang = 'es') {
       where: `WHERE dateCameIn >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
              AND dateCameIn < DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 1 MONTH)`,
       label: makeLabel('this_month', 0, null, lang),
+      matched: true,
     };
   }
 
@@ -106,15 +114,17 @@ function extractTimeWindow(question, lang = 'es') {
       where: `WHERE dateCameIn >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01')
              AND dateCameIn < DATE_FORMAT(CURDATE(), '%Y-%m-01')`,
       label: makeLabel('last_month', 0, null, lang),
+      matched: true,
     };
   }
 
   // Año pasado (año calendario anterior)
-  if (q.includes('ano pasado') || q.includes('año pasado') || q.includes('last year')) {
+  if (q.includes('ano pasado') || q.includes('año pasado') || q.includes('last year') || q.includes('previous year')) {
     return {
       where: `WHERE dateCameIn >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 YEAR), '%Y-01-01')
              AND dateCameIn < DATE_FORMAT(CURDATE(), '%Y-01-01')`,
       label: makeLabel('last_year', 0, null, lang),
+      matched: true,
     };
   }
 
@@ -124,6 +134,7 @@ function extractTimeWindow(question, lang = 'es') {
       where: `WHERE dateCameIn >= DATE_FORMAT(CURDATE(), '%Y-01-01')
              AND dateCameIn < DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-01-01'), INTERVAL 1 YEAR)`,
       label: makeLabel('current_year', 0, null, lang),
+      matched: true,
     };
   }
 
@@ -137,6 +148,7 @@ function extractTimeWindow(question, lang = 'es') {
       return {
         where: `WHERE dateCameIn >= DATE_SUB(CURDATE(), INTERVAL ${n} DAY)`,
         label: makeLabel('days', n, null, lang),
+        matched: true,
       };
     }
   }
@@ -151,6 +163,7 @@ function extractTimeWindow(question, lang = 'es') {
       return {
         where: `WHERE dateCameIn >= DATE_SUB(CURDATE(), INTERVAL ${n} MONTH)`,
         label: makeLabel('months', n, null, lang),
+        matched: true,
       };
     }
   }
@@ -166,6 +179,7 @@ function extractTimeWindow(question, lang = 'es') {
       where: `WHERE dateCameIn >= DATE('${start}')
              AND dateCameIn < DATE_ADD(DATE('${end}'), INTERVAL 1 DAY)`,
       label: makeLabel('range', start, end, lang),
+      matched: true,
     };
   }
 
@@ -180,6 +194,7 @@ function extractTimeWindow(question, lang = 'es') {
       where: `WHERE dateCameIn >= DATE('${start}')
              AND dateCameIn < DATE_ADD(DATE('${end}'), INTERVAL 1 DAY)`,
       label: makeLabel('range', start, end, lang),
+      matched: true,
     };
   }
 
@@ -213,6 +228,7 @@ function extractTimeWindow(question, lang = 'es') {
       where: `WHERE dateCameIn >= DATE('${start}')
              AND dateCameIn < DATE_ADD(DATE('${start}'), INTERVAL 3 MONTH)`,
       label: makeLabel('quarters', qNum, yNum, lang),
+      matched: true,
     };
   }
 
@@ -238,11 +254,12 @@ function extractTimeWindow(question, lang = 'es') {
         where: `WHERE dateCameIn >= DATE('${start}')
                AND dateCameIn < DATE_ADD(DATE('${start}'), INTERVAL 1 MONTH)`,
         label: makeLabel('month_year', monthLabel(monthNum, lang), yearNum, lang),
+        matched: true,
       };
     }
   }
 
-  // Mes solo: "marzo" -> el mes más reciente ya pasado (si aún no llega este año, usa año anterior)
+  // Mes solo: "marzo" -> mes más reciente ya pasado (si aún no llega este año, usa año anterior)
   const mMonthOnly = q.match(
     /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|sept|octubre|noviembre|diciembre|january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b/
   );
@@ -260,6 +277,7 @@ function extractTimeWindow(question, lang = 'es') {
                   '-${mm}-01'
                 ), '%Y-%m-%d'), INTERVAL 1 MONTH)`,
         label: makeLabel('month_only', monthLabel(monthNum, lang), null, lang),
+        matched: true,
       };
     }
   }
@@ -272,10 +290,11 @@ function extractTimeWindow(question, lang = 'es') {
       where: `WHERE dateCameIn >= DATE('${y}-01-01')
              AND dateCameIn < DATE('${y + 1}-01-01')`,
       label: makeLabel('year', y, null, lang),
+      matched: true,
     };
   }
 
-  return { where, label };
+  return { where, label, matched };
 }
 
 function buildKpiPackSql(message, opts = {}) {
@@ -288,8 +307,10 @@ function buildKpiPackSql(message, opts = {}) {
     ? String(w.where || '').trim().slice(6).trim()
     : String(w.where || '').trim();
 
-  const whereParts = [timeClause];
+  const whereParts = [];
   const params = [];
+
+  if (timeClause) whereParts.push(timeClause);
 
   // filtro persona (submitterName/intakeSpecialist/attorney)
   if (opts.person?.value) {
@@ -329,7 +350,12 @@ FROM performance_data.dmLogReportDashboard
 ${whereClause};
 `.trim();
 
-  return { sql, params, windowLabel: w.label };
+  return {
+    sql,
+    params,
+    windowLabel: w.label,
+    timeMatched: !!w.matched, // útil para tu router (si quieres decidir IA vs KPI)
+  };
 }
 
 module.exports = { buildKpiPackSql };
