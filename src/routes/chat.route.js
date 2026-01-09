@@ -190,7 +190,8 @@ router.post('/chat', async (req, res) => {
     }
 
     // Usamos la detección del service (si está bien) + fallback robusto
-    const wantsLinks = (typeof wantsPdfLinks === 'function' ? wantsPdfLinks(message) : false) || wantsLinksLocal(message);
+    const wantsLinks =
+      (typeof wantsPdfLinks === 'function' ? wantsPdfLinks(message) : false) || wantsLinksLocal(message);
 
     // =========================================================
     // A) MODO "LOGS/PDF": determinístico (NO dependas de la IA)
@@ -200,8 +201,8 @@ router.post('/chat', async (req, res) => {
 
       // 1) resolver persona desde stg_g_users usando guessedName
       const u = await findUserPdfLinks(pool, guessedName || message);
-console.log('\nPDFLINKS_LOOKUP_MESSAGE =>', message);
-console.log('PDFLINKS_USER_FOUND =>', u ? { name: u.name, nick: u.nick } : null);
+      console.log('\nPDFLINKS_LOOKUP_MESSAGE =>', message);
+      console.log('PDFLINKS_USER_FOUND =>', u ? { name: u.name, nick: u.nick } : null);
       let links = null;
       let personName = null;
 
@@ -244,7 +245,12 @@ console.log('PDFLINKS_USER_FOUND =>', u ? { name: u.name, nick: u.nick } : null)
       // 3) KPI pack con filtro de persona si existe
       const personFilter = personName ? { column: 'submitterName', value: personName } : null;
 
-      const { sql: kpiSql, params: kpiParams, windowLabel } = buildKpiPackSql(message, {
+      // ✅ CAMBIO PRUDENTE: SOLO en modo logs/roster, forzamos "últimos 90 días" para el KPI pack.
+      //    No tocamos el modo normal, ni cambiamos tu SQL principal (mainSql).
+      const kpiMessage =
+        uiLang === 'es' ? `${message} últimos 90 días` : `${message} last 90 days`;
+
+      const { sql: kpiSql, params: kpiParams, windowLabel } = buildKpiPackSql(kpiMessage, {
         lang: uiLang,
         person: personFilter,
       });
