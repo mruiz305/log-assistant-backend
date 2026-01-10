@@ -72,7 +72,7 @@ router.post('/chat', async (req, res) => {
 
     // ====== default: ESTE MES si no especifican periodo ======
     const messageWithDefaultPeriod = ensureDefaultMonth(message, uiLang);
-
+   
     // ====== detectar dimension (office/team/etc) ======
     const dim = extractDimensionFromMessage(message, uiLang);
 
@@ -228,15 +228,20 @@ router.post('/chat', async (req, res) => {
 
     // 1) SQL (IA)
     let { sql, comment } = await buildSqlFromQuestion(messageWithDefaultPeriod, uiLang);
+console.log('\n=== SQL_AI_RAW ===\n', sql);
 
     // 2) Normalizar + reglas
     sql = normalizeAnalyticsSql(sql);
+    console.log('\n=== SQL_AFTER_NORMALIZE ===\n', sql);
     sql = enforceStatusRules(sql);
 
     // 2.1) persona => submitter LIKE (incluye name='X' si aplica)
     {
       const before = sql;
       sql = rewritePersonEqualsToLike(sql, messageWithDefaultPeriod);
+      console.log('\n=== SQL_AFTER_PERSON_REWRITE ===\n', sql);
+  console.log('PERSON_REWRITE_CHANGED?', before !== sql);
+
       if (before !== sql) console.log('\n=== SQL_REWRITE_APPLIED (PERSON) ===\n', sql);
     }
 
@@ -244,6 +249,9 @@ router.post('/chat', async (req, res) => {
     if (dim) {
       const before = sql;
       sql = injectLikeFilter(sql, dim.column, dim.value);
+       console.log('\n=== SQL_AFTER_DIM_REWRITE ===\n', sql);
+  console.log('DIM_REWRITE_CHANGED?', before !== sql);
+
       if (before !== sql) console.log('\n=== SQL_REWRITE_APPLIED (DIM) ===\n', sql);
     }
 
@@ -251,6 +259,7 @@ router.post('/chat', async (req, res) => {
     let safeSql;
     try {
       safeSql = validateAnalyticsSql(sql);
+      console.log('\n=== SQL_SAFE ===\n', safeSql);
     } catch (e) {
       return res.status(400).json({
         error: uiLang === 'es' ? 'SQL no permitido' : 'SQL not allowed',
@@ -292,20 +301,20 @@ router.post('/chat', async (req, res) => {
     }
 
     // 4.1) KPI Pack con MISMO filtro persona + MISMA dimensión
-    const personFilter = extractPersonFilterFromSql(safeSql);
-    console.log('\nPERSON_FILTER =>', personFilter);
-    console.log('\nDIM_FILTER =>', dim);
+const personFilter = extractPersonFilterFromSql(safeSql); // <- del SQL final (safe)
+console.log('\nPERSON_FILTER =>', personFilter);
+console.log('\nDIM_FILTER =>', dim);
 
-    let { sql: kpiSql, params: kpiParams, windowLabel } = buildKpiPackSql(messageWithDefaultPeriod, {
-      lang: uiLang,
-      person: personFilter,
-    });
+let { sql: kpiSql, params: kpiParams, windowLabel } = buildKpiPackSql(messageWithDefaultPeriod, {
+  lang: uiLang,
+  person: personFilter,
+});
 
-    if (dim) kpiSql = injectLikeFilter(kpiSql, dim.column, dim.value);
+if (dim) kpiSql = injectLikeFilter(kpiSql, dim.column, dim.value);
 
-    console.log('\n=== SQL_KPI_EXEC ===\n', kpiSql, '\nPARAMS:', kpiParams);
-    const [kpiRows] = await pool.query(kpiSql, kpiParams);
-    const kpiPack = Array.isArray(kpiRows) && kpiRows[0] ? kpiRows[0] : null;
+console.log('\n=== SQL_KPI_EXEC ===\n', kpiSql, '\nPARAMS:', kpiParams);
+const [kpiPack] = await pool.query(kpiSql, kpiParams);
+
 
     // 4.2) Links opcional (modo normal)
     let links = null;

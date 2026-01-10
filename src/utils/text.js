@@ -14,6 +14,14 @@ function hasExplicitPeriod(message = '', lang = 'es') {
   if (/\b\d{4}-\d{2}-\d{2}\b/.test(q)) return true;
   if (/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(q)) return true;
 
+  // ✅ año explícito tipo 2026
+  if (/\b(19|20)\d{2}\b/.test(q)) return true;
+
+  // ✅ frases típicas de año completo
+  if (/\b(all|todo|toda|durante|en)\s+(el\s+)?(ano|año|year\s+)?(19|20)\d{2}\b/.test(q)) {
+    return true;
+  }
+
   // palabras clave típicas (ES/EN)
   const periodWords = [
     'hoy', 'ayer', 'semana', 'semanal', 'ultimos 7', 'últimos 7', '7 dias', '7 días',
@@ -30,7 +38,6 @@ function hasExplicitPeriod(message = '', lang = 'es') {
 
   return periodWords.some((w) => q.includes(w));
 }
-
 
 function normalizePreset(preset) {
   const p = String(preset || '').trim();
