@@ -1,185 +1,41 @@
 const express = require('express');
 const router = express.Router();
 
+/* Infra / Guard */
 const pool = require('../infra/db.pool');
 const { validateAnalyticsSql } = require('../../sqlGuard');
 
+/* Services */
 const { buildSqlFromQuestion } = require('../services/sqlBuilder.service');
 const { buildOwnerAnswer } = require('../services/ownerAnswer.service');
 const { enforceStatusRules } = require('../services/sqlRules.service');
 const { normalizeAnalyticsSql } = require('../services/sqlNormalize.service');
 const { buildKpiPackSql } = require('../services/kpiPack.service');
 const { wantsPdfLinks, findUserPdfLinks } = require('../services/pdfLinks.service');
+const { classifyIntentInfo, buildHelpAnswer } = require('../services/intent');
+const {
+  extractUserNameFromMessage,
+  setUserName,
+  getUserName,
+} = require('../services/userProfile.service');
 
-/* =========================================================
-   HELPERS
-========================================================= */
-function normalizeText(s = '') {
-  return String(s || '')
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '');
-}
-
-function questionMentionsClient(message = '') {
-  const q = normalizeText(message);
-  return (
-    q.includes('cliente') ||
-    q.includes('client') ||
-    q.includes('patient') ||
-    q.includes('paciente') ||
-    q.includes('lead') ||
-    q.includes('case') ||
-    q.includes('caso') ||
-    q.includes('claimant') ||
-    q.includes('injured') ||
-    q.includes('nombre del caso') ||
-    q.includes('nombre del cliente')
-  );
-}
-
-function questionMentionsIntake(message = '') {
-  const q = normalizeText(message);
-  return (
-    q.includes('intake') ||
-    q.includes('intake specialist') ||
-    q.includes('locked down') ||
-    q.includes('lock down') ||
-    q.includes('cerrado por') ||
-    q.includes('bloqueado por')
-  );
-}
-
-/**
- * Detecta si piden links/pdf/logs (singular/plural).
- * Nota: esta función viene de pdfLinks.service, pero por si esa regex aún no está lista,
- * usamos una local robusta para el "modo logs".
- */
-function wantsLinksLocal(message = '') {
-  return /(pdf|url|link|enlace|log\b|logs\b|log completo|full log|details|roster|reporte|report)/i.test(
-    String(message || '')
-  );
-}
-
-/**
- * Extrae un "nombre probable" desde pedidos de logs/pdf sin IA.
- * Ej: "Give me the Lalesca Castilblanco log." => "Lalesca Castilblanco"
- */
-function extractNameFromLogRequest(message = '') {
-  const cleaned = String(message || '')
-    .replace(/(give me|please|por favor|dame|mu[eé]strame|send me)/gi, ' ')
-    .replace(/\b(the|el|la|los|las)\b/gi, ' ')
-    .replace(/\b(log|logs|pdf|link|url|roster|reporte|report|details|completo)\b/gi, ' ')
-    .replace(/[^\p{L}\p{N}\s'-]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  return cleaned.length >= 3 ? cleaned : null;
-}
-
-/**
- * Reglas:
- * - Si la IA usa intakeSpecialist='X' y NO pidieron intake => cambia a submitter LIKE
- * - Si la IA usa submitterName='X' => cambia a submitter LIKE
- * - Si la IA usa COALESCE(...)='X' => cambia a LIKE
- * - Si la IA usa name='X' y NO pidieron cliente => cambia a submitter LIKE (evita confundir "name")
- */
-function rewritePersonEqualsToLike(sql, message) {
-  let s = String(sql || '');
-
-  const esc = (v) => String(v || '').replace(/'/g, "''");
-
-  const isIntakeAsked = questionMentionsIntake(message);
-  const isClientAsked = questionMentionsClient(message);
-
-  // intakeSpecialist = 'X'
-  const rxIntakeEq =
-    /(?:\b\w+\b\.)?(?:`?\w+`?\.)?`?intakeSpecialist`?\s*=\s*'([^']+)'/gi;
-
-  // submitterName = 'X'
-  const rxSubmitterEq =
-    /(?:\b\w+\b\.)?(?:`?\w+`?\.)?`?submitterName`?\s*=\s*'([^']+)'/gi;
-
-  // TRIM(COALESCE(NULLIF(submitterName,''),submitter)) = 'X'
-  const rxCoalesceSubmitterEq =
-    /TRIM\s*\(\s*COALESCE\s*\(\s*NULLIF\s*\(\s*submitterName\s*,\s*''\s*\)\s*,\s*submitter\s*\)\s*\)\s*=\s*'([^']+)'/gi;
-
-  // name = 'X'  (en tu tabla es nombre del cliente/lead)
-  const rxNameEq =
-    /(?:\b\w+\b\.)?(?:`?\w+`?\.)?`?name`?\s*=\s*'([^']+)'/gi;
-
-  // Si NO pidieron intake, fuerza intakeSpecialist -> submitter LIKE
-  if (!isIntakeAsked) {
-    s = s.replace(rxIntakeEq, (m, name) => {
-      const v = esc(name);
-      return `LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter))) LIKE CONCAT('%', LOWER(TRIM('${v}')), '%')`;
-    });
-  }
-
-  // submitterName='X' -> LIKE (coalesce submitterName/submitter)
-  s = s.replace(rxSubmitterEq, (m, name) => {
-    const v = esc(name);
-    return `LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter))) LIKE CONCAT('%', LOWER(TRIM('${v}')), '%')`;
-  });
-
-  // COALESCE(...)='X' -> LIKE
-  s = s.replace(rxCoalesceSubmitterEq, (m, name) => {
-    const v = esc(name);
-    return `LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter))) LIKE CONCAT('%', LOWER(TRIM('${v}')), '%')`;
-  });
-
-  // name='X' -> si NO pidieron cliente/caso, reescribe a submitter LIKE
-  if (!isClientAsked) {
-    s = s.replace(rxNameEq, (m, name) => {
-      const v = esc(name);
-      return `LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter))) LIKE CONCAT('%', LOWER(TRIM('${v}')), '%')`;
-    });
-  }
-
-  return s;
-}
-
-/**
- * Extrae filtro de persona para pasarlo al KPI pack
- * Retorna: { column: 'submitterName'|'intakeSpecialist'|'attorney', value: '...' } | null
- */
-function extractPersonFilterFromSql(sql = '') {
-  const s = String(sql || '');
-
-  // LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter))) LIKE CONCAT('%', LOWER(TRIM('X')), '%')
-  let m = s.match(
-    /LOWER\s*\(\s*TRIM\s*\(\s*COALESCE\s*\(\s*NULLIF\s*\(\s*submitterName\s*,\s*''\s*\)\s*,\s*submitter\s*\)\s*\)\s*\)\s+LIKE\s+CONCAT\s*\(\s*'%'\s*,\s*LOWER\s*\(\s*TRIM\s*\(\s*'([^']+)'\s*\)\s*\)\s*,\s*'%'\s*\)/i
-  );
-  if (m) return { column: 'submitterName', value: m[1] };
-
-  // submitterName LIKE '%X%'
-  m = s.match(/\bsubmitterName\s+LIKE\s+'%([^']+)%'/i);
-  if (m) return { column: 'submitterName', value: m[1] };
-
-  // intakeSpecialist LIKE '%X%'
-  m = s.match(/\bintakeSpecialist\s+LIKE\s+'%([^']+)%'/i);
-  if (m) return { column: 'intakeSpecialist', value: m[1] };
-
-  // attorney LIKE '%X%'
-  m = s.match(/\battorney\s+LIKE\s+'%([^']+)%'/i);
-  if (m) return { column: 'attorney', value: m[1] };
-
-  // submitterName = 'X'
-  m = s.match(/\bsubmitterName\s*=\s*'([^']+)'/i);
-  if (m) return { column: 'submitterName', value: m[1] };
-
-  // intakeSpecialist = 'X'
-  m = s.match(/\bintakeSpecialist\s*=\s*'([^']+)'/i);
-  if (m) return { column: 'intakeSpecialist', value: m[1] };
-
-  return null;
-}
+/* Utils */
+const { normalizePreset, ensureDefaultMonth } = require('../utils/text');
+const { extractDimensionFromMessage, injectLikeFilter } = require('../utils/dimension');
+const { wantsLinksLocal, extractNameFromLogRequest, findSubmitterCandidates } = require('../utils/pdfLinks.local');
+const { rewritePersonEqualsToLike, extractPersonFilterFromSql } = require('../utils/personRewrite');
+const { buildMiniChart } = require('../utils/miniChart');
+const { presetToCanonicalMessage, presetToDeterministicSql } = require('../utils/presets');
 
 /* =========================================================
    ROUTE
 ========================================================= */
+
 router.post('/chat', async (req, res) => {
-  const { message, lang } = req.body || {};
+  const { message, lang, clientId, preset } = req.body || {};
+  const presetKey = normalizePreset(preset);
+
+  const cid = String(clientId || '').trim();
   const uiLang = lang === 'es' ? 'es' : 'en';
 
   try {
@@ -189,20 +45,51 @@ router.post('/chat', async (req, res) => {
       });
     }
 
-    // Usamos la detección del service (si está bien) + fallback robusto
+    // ====== USER NAME (opcional) ======
+    let userName = null;
+
+    const extracted = extractUserNameFromMessage(message);
+    if (cid && extracted) {
+      setUserName(cid, extracted);
+      userName = extracted;
+    } else if (cid) {
+      userName = getUserName(cid);
+    }
+
+    // 2.1) Intent: si es saludo/ayuda, NO ejecutar SQL
+    const intentInfo = classifyIntentInfo(message);
+    if (intentInfo && intentInfo.needsSql === false) {
+      return res.json({
+        ok: true,
+        answer: buildHelpAnswer(uiLang, { userName }),
+        rowCount: 0,
+        aiComment: 'help_mode',
+        links: null,
+        userName: userName || null,
+        chart: null,
+      });
+    }
+
+    // ====== default: ESTE MES si no especifican periodo ======
+    const messageWithDefaultPeriod = ensureDefaultMonth(message, uiLang);
+
+    // ====== detectar dimension (office/team/etc) ======
+    const dim = extractDimensionFromMessage(message, uiLang);
+
+    // Usamos wantsPdfLinks service + fallback local
     const wantsLinks =
       (typeof wantsPdfLinks === 'function' ? wantsPdfLinks(message) : false) || wantsLinksLocal(message);
 
     // =========================================================
-    // A) MODO "LOGS/PDF": determinístico (NO dependas de la IA)
+    // A) MODO "LOGS/PDF": determinístico
     // =========================================================
     if (wantsLinks) {
       const guessedName = extractNameFromLogRequest(message);
 
-      // 1) resolver persona desde stg_g_users usando guessedName
       const u = await findUserPdfLinks(pool, guessedName || message);
       console.log('\nPDFLINKS_LOOKUP_MESSAGE =>', message);
       console.log('PDFLINKS_USER_FOUND =>', u ? { name: u.name, nick: u.nick } : null);
+
       let links = null;
       let personName = null;
 
@@ -215,7 +102,6 @@ router.post('/chat', async (req, res) => {
         };
       }
 
-      // 2) Snapshot de ESTE MES por submitter
       let rows = [];
       let mainSql = '/* no person resolved */ SELECT 1 WHERE 1=0';
       let mainParams = [];
@@ -242,41 +128,98 @@ router.post('/chat', async (req, res) => {
         console.log('\n=== SQL_MAIN_EXEC ===\n', mainSql, '\nNOTE: no person resolved from message:', message);
       }
 
-      // 3) KPI pack con filtro de persona si existe
       const personFilter = personName ? { column: 'submitterName', value: personName } : null;
 
-      // ✅ CAMBIO PRUDENTE: SOLO en modo logs/roster, forzamos "últimos 90 días" para el KPI pack.
-      //    No tocamos el modo normal, ni cambiamos tu SQL principal (mainSql).
-      const kpiMessage =
-        uiLang === 'es' ? `${message} últimos 90 días` : `${message} last 90 days`;
+      // KPI pack en logs mode: dejamos tu idea (últimos 90 días)
+      const kpiMessage = uiLang === 'es' ? `${message} últimos 90 días` : `${message} last 90 days`;
 
-      const { sql: kpiSql, params: kpiParams, windowLabel } = buildKpiPackSql(kpiMessage, {
+      let { sql: kpiSql, params: kpiParams, windowLabel } = buildKpiPackSql(kpiMessage, {
         lang: uiLang,
         person: personFilter,
       });
+
+      if (dim) kpiSql = injectLikeFilter(kpiSql, dim.column, dim.value);
 
       console.log('\n=== SQL_KPI_EXEC ===\n', kpiSql, '\nPARAMS:', kpiParams);
       const [kpiRows] = await pool.query(kpiSql, kpiParams);
       const kpiPack = Array.isArray(kpiRows) && kpiRows[0] ? kpiRows[0] : null;
 
       const sqlForAnswer = `/* LOGS MODE */\n${mainSql}`;
-      const answer = await buildOwnerAnswer(message, sqlForAnswer, rows, {
+      const answer = await buildOwnerAnswer(kpiMessage, sqlForAnswer, rows, {
         kpiPack,
         kpiWindow: windowLabel,
         lang: uiLang,
         links,
+        userName,
       });
 
       const showSql = String(process.env.SHOW_SQL || '').toLowerCase() === 'true';
+      const chart = buildMiniChart(kpiMessage, uiLang, { kpiPack, rows });
 
       return res.json({
         ok: true,
         answer,
         rowCount: Array.isArray(rows) ? rows.length : 0,
         aiComment: 'logs_mode',
-        links, // ✅ aquí SIEMPRE devolvemos links si los resolvimos
+        links,
+        userName: userName || null,
+        chart,
         ...(showSql ? { sql: mainSql } : {}),
       });
+    }
+
+    // =========================================================
+    // A.5) QUICK PRESETS: determinístico (NO IA)
+    // =========================================================
+    if (presetKey) {
+      const canonicalMsg = presetToCanonicalMessage(presetKey, uiLang);
+      const deterministicSql = presetToDeterministicSql(presetKey);
+
+      if (canonicalMsg && deterministicSql) {
+        console.log('\n=== PRESET_MODE ===', presetKey);
+        console.log('CANONICAL_MESSAGE =>', canonicalMsg);
+        console.log('SQL_PRESET_EXEC =>\n', deterministicSql);
+
+        const [rowsPreset] = await pool.query(deterministicSql);
+
+        let { sql: kpiSql, params: kpiParams, windowLabel } = buildKpiPackSql(canonicalMsg, {
+          lang: uiLang,
+          person: null,
+        });
+
+        console.log('\n=== SQL_KPI_EXEC (PRESET) ===\n', kpiSql, '\nPARAMS:', kpiParams);
+        const [kpiRows] = await pool.query(kpiSql, kpiParams);
+        const kpiPack = Array.isArray(kpiRows) && kpiRows[0] ? kpiRows[0] : null;
+
+        const answer = await buildOwnerAnswer(
+          canonicalMsg,
+          `/* PRESET ${presetKey} */\n${deterministicSql}`,
+          rowsPreset,
+          {
+            kpiPack,
+            kpiWindow: windowLabel,
+            lang: uiLang,
+            links: null,
+            userName,
+          }
+        );
+
+        const chart = buildMiniChart(canonicalMsg, uiLang, {
+          kpiPack,
+          rows: rowsPreset,
+          presetKey,
+        });
+
+        return res.json({
+          ok: true,
+          answer,
+          rowCount: Array.isArray(rowsPreset) ? rowsPreset.length : 0,
+          aiComment: `preset:${presetKey}`,
+          links: null,
+          userName: userName || null,
+          chart,
+        });
+      }
     }
 
     // =========================================================
@@ -284,18 +227,24 @@ router.post('/chat', async (req, res) => {
     // =========================================================
 
     // 1) SQL (IA)
-    let { sql, comment } = await buildSqlFromQuestion(message, uiLang);
+    let { sql, comment } = await buildSqlFromQuestion(messageWithDefaultPeriod, uiLang);
 
     // 2) Normalizar + reglas
     sql = normalizeAnalyticsSql(sql);
     sql = enforceStatusRules(sql);
 
     // 2.1) persona => submitter LIKE (incluye name='X' si aplica)
-    const beforeRewrite = sql;
-    sql = rewritePersonEqualsToLike(sql, message);
+    {
+      const before = sql;
+      sql = rewritePersonEqualsToLike(sql, messageWithDefaultPeriod);
+      if (before !== sql) console.log('\n=== SQL_REWRITE_APPLIED (PERSON) ===\n', sql);
+    }
 
-    if (beforeRewrite !== sql) {
-      console.log('\n=== SQL_REWRITE_APPLIED ===\n', sql);
+    // 2.2) dimensión => inyectar LIKE
+    if (dim) {
+      const before = sql;
+      sql = injectLikeFilter(sql, dim.column, dim.value);
+      if (before !== sql) console.log('\n=== SQL_REWRITE_APPLIED (DIM) ===\n', sql);
     }
 
     // 3) Validar SQL
@@ -314,20 +263,51 @@ router.post('/chat', async (req, res) => {
     console.log('\n=== SQL_MAIN_EXEC ===\n', safeSql);
     const [rows] = await pool.query(safeSql);
 
-    // 4.1) KPI Pack con MISMO filtro persona si existe
+    // 4.0) Anti "0 cases" cuando hay filtro de submitter: sugerir variantes
+    if (Array.isArray(rows) && rows.length === 0) {
+      const pf0 = extractPersonFilterFromSql(safeSql);
+
+      if (pf0 && pf0.column === 'submitterName' && pf0.value) {
+        const candidates = await findSubmitterCandidates(pool, pf0.value, 8);
+
+        if (candidates.length > 0) {
+          const list = candidates.map((c, i) => `${i + 1}) ${c.submitter} (${c.cnt})`).join('\n');
+
+          const msg =
+            uiLang === 'es'
+              ? `No encontré casos con el nombre exacto "${pf0.value}", pero encontré estas variantes. ¿Cuál es la correcta?\n\n${list}`
+              : `I didn't find cases for the exact name "${pf0.value}", but I found these close matches. Which one do you mean?\n\n${list}`;
+
+          return res.json({
+            ok: true,
+            answer: msg,
+            rowCount: 0,
+            aiComment: 'person_disambiguation',
+            links: null,
+            userName: userName || null,
+            chart: null,
+          });
+        }
+      }
+    }
+
+    // 4.1) KPI Pack con MISMO filtro persona + MISMA dimensión
     const personFilter = extractPersonFilterFromSql(safeSql);
     console.log('\nPERSON_FILTER =>', personFilter);
+    console.log('\nDIM_FILTER =>', dim);
 
-    const { sql: kpiSql, params: kpiParams, windowLabel } = buildKpiPackSql(message, {
+    let { sql: kpiSql, params: kpiParams, windowLabel } = buildKpiPackSql(messageWithDefaultPeriod, {
       lang: uiLang,
       person: personFilter,
     });
+
+    if (dim) kpiSql = injectLikeFilter(kpiSql, dim.column, dim.value);
 
     console.log('\n=== SQL_KPI_EXEC ===\n', kpiSql, '\nPARAMS:', kpiParams);
     const [kpiRows] = await pool.query(kpiSql, kpiParams);
     const kpiPack = Array.isArray(kpiRows) && kpiRows[0] ? kpiRows[0] : null;
 
-    // 4.2) Links opcional si el usuario lo pidió (modo normal)
+    // 4.2) Links opcional (modo normal)
     let links = null;
     if (wantsLinksLocal(message)) {
       const guessedName = extractNameFromLogRequest(message);
@@ -343,14 +323,16 @@ router.post('/chat', async (req, res) => {
 
     // 5) Resumen ejecutivo
     const sqlForAnswer = `/* ${comment || ''} */\n${safeSql}`;
-    const answer = await buildOwnerAnswer(message, sqlForAnswer, rows, {
+    const answer = await buildOwnerAnswer(messageWithDefaultPeriod, sqlForAnswer, rows, {
       kpiPack,
       kpiWindow: windowLabel,
       lang: uiLang,
       links,
+      userName,
     });
 
     const showSql = String(process.env.SHOW_SQL || '').toLowerCase() === 'true';
+    const chart = buildMiniChart(messageWithDefaultPeriod, uiLang, { kpiPack, rows });
 
     return res.json({
       ok: true,
@@ -358,6 +340,8 @@ router.post('/chat', async (req, res) => {
       rowCount: Array.isArray(rows) ? rows.length : 0,
       aiComment: comment,
       links,
+      userName: userName || null,
+      chart,
       ...(showSql ? { sql: safeSql } : {}),
     });
   } catch (err) {

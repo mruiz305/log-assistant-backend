@@ -2,6 +2,7 @@ const openai = require('../infra/openai.client');
 const fs = require('fs');
 const path = require('path');
 const { classifyIntent } = require('./intent');
+const { getAssistantProfile } = require('./assistantProfile');
 
 function normalizeText(s = '') {
   return (s || '')
@@ -190,7 +191,6 @@ function extractTimeWindow(question, uiLang = 'en', opts = {}) {
   return { where, label };
 }
 
-
 function tryGoldenTemplate(question, intent, uiLang = 'en', opts = {}) {
   const q = normalizeText(question);
   const { where, label } = extractTimeWindow(question, uiLang, opts);
@@ -199,7 +199,6 @@ function tryGoldenTemplate(question, intent, uiLang = 'en', opts = {}) {
 
   // =========================
   // TEMPLATE 1: Confirmados + Gross + Dropped + %Dropped por mes
-  // Trigger: confirmed/confirmados + (por mes / mensual / monthly)
   // =========================
   const wantsMonthly =
     (intent === 'cnv' || intent === 'mix' || intent === 'general') &&
@@ -233,7 +232,6 @@ ORDER BY anio, mes;
 
   // =========================
   // TEMPLATE 2: Salud operativa por Team (Problem/Dropped/umbrales)
-  // Trigger: dropped/problem + por team/equipo
   // =========================
   const wantsTeamHealth =
     (intent === 'health' || intent === 'mix' || intent === 'general') &&
@@ -262,7 +260,7 @@ ORDER BY dropped_gt_60 DESC, problem_gt_30 DESC, dropped_cases DESC;
   }
 
   // =========================
-  // TEMPLATE 3: Leakage (confirmados con problem/dropped/clinical dropped) por Office
+  // TEMPLATE 3: Leakage por Office
   // =========================
   const wantsLeakage =
     (intent === 'mix' || intent === 'clinical' || intent === 'cnv' || intent === 'general') &&
@@ -311,7 +309,6 @@ function safeLoadDataContract() {
 }
 
 function buildSchemaDescription(uiLang = 'en') {
-  // ✅ OJO: cambié la explicación de Confirmed/convertedValue y la terminología
   if (uiLang === 'es') {
     return `
 Vista disponible: dmLogReportDashboard (solo lectura)
@@ -400,7 +397,6 @@ Debes devolver JSON EXACTO:
 `.trim();
   }
 
-  // English
   return `
 Available view: dmLogReportDashboard (read-only)
 
@@ -439,7 +435,7 @@ DirectorName, RegionName, OfficeName, PODEName, TeamName, officeLabel.
    - PROBLEM >30 => Status LIKE '%PROBLEM%' AND Status LIKE '%30%'
 
    Note: a case may have Confirmed=1 and still show PROBLEM/REF OUT/DROPPED in Status/ClinicalStatus.
-         Status does NOT invalidate Confirmed or credit.
+         Status does NOT invalidate confirmed or credit.
 
 5) CLINICAL DROPPED (only if explicitly requested):
    - Clinical dropped => ClinicalStatus LIKE '%DROP%'
@@ -519,22 +515,26 @@ async function buildSqlFromQuestion(question, uiLang = 'en', opts = {}) {
 
   const schemaDescription = buildSchemaDescription(lang);
   const dataContractJson = safeLoadDataContract();
-  const intent = classifyIntent(question);
+
+  // ✅ classifyIntent ahora devuelve { intent, needsSql }
+  const intentInfo = classifyIntent(question);
+  const intent = intentInfo?.intent || 'general';
 
   // ✅ Golden template fallback (no OpenAI call)
- const golden = tryGoldenTemplate(question, intent, lang, opts);
+  const golden = tryGoldenTemplate(question, intent, lang, opts);
   if (golden) return golden;
 
   const prompt = buildUserPrompt(question, intent, lang);
+  const profile = getAssistantProfile(lang);
 
   const inputMessages = [
-    {
-      role: 'system',
-      content:
-        lang === 'es'
-          ? 'Eres un generador de SQL experto en MySQL. Solo SELECT. Solo devuelves JSON válido. No inventes columnas. No LIMIT.'
-          : 'You are an expert MySQL SQL generator. Output ONLY JSON. ONLY SELECT. Do not invent columns. Do not use LIMIT.',
-    },
+   {
+  role: 'system',
+  content:
+    lang === 'es'
+      ? `Tu nombre es ${profile.name}. Estilo: ${profile.style}. Eres un generador de SQL experto en MySQL. Solo SELECT. Solo JSON válido. No LIMIT.`
+      : `Your name is ${profile.name}. Style: ${profile.style}. You are an expert MySQL SQL generator. ONLY SELECT. Output ONLY valid JSON. No LIMIT.`,
+  },
     { role: 'system', content: schemaDescription },
   ];
 

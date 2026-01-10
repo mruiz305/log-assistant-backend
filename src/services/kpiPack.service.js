@@ -380,7 +380,7 @@ function extractTimeWindow(question, lang = 'es', defaultWindowDays = null) {
 function buildKpiPackSql(message, opts = {}) {
   const lang = opts.lang === 'es' ? 'es' : 'en';
 
-  // ✅ NO asumir 90 días. Si quieres fallback, pásalo explícito:
+  // ✅ NO asumir 90 días:
   // buildKpiPackSql(msg, { lang:'es', person, defaultWindowDays: 90 })
   const w = extractTimeWindow(message, lang, opts.defaultWindowDays ?? null);
 
@@ -394,7 +394,8 @@ function buildKpiPackSql(message, opts = {}) {
   const params = [];
 
   if (timeClause) whereParts.push(timeClause);
-
+ console.log('\n=== opts.person?.value ===\n', opts.person?.value);
+     
   // filtro persona (submitterName/intakeSpecialist/attorney)
   if (opts.person?.value) {
     const val = String(opts.person.value || '').trim();
@@ -428,7 +429,9 @@ SELECT
   ROUND(100 * SUM(CASE WHEN Status LIKE '%PROBLEM%' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS problem_rate,
   SUM(CASE WHEN Confirmed=1 AND Status LIKE '%PROBLEM%' THEN 1 ELSE 0 END) AS leakage_confirmed_problem,
   SUM(CASE WHEN Confirmed=1 AND Status LIKE '%DROP%' THEN 1 ELSE 0 END) AS leakage_confirmed_dropped_status,
-  SUM(CASE WHEN Confirmed=1 AND ClinicalStatus LIKE '%DROP%' THEN 1 ELSE 0 END) AS leakage_confirmed_clinical_dropped
+  SUM(CASE WHEN Confirmed=1 AND ClinicalStatus LIKE '%DROP%' THEN 1 ELSE 0 END) AS leakage_confirmed_clinical_dropped,
+    SUM(CASE WHEN Confirmed=0 and  Status LIKE '%ACTI%' THEN 1 ELSE 0 END) AS active_cases,
+  SUM(CASE WHEN Confirmed=0 and  Status LIKE '%REF%' THEN 1 ELSE 0 END) AS referout_cases
 FROM performance_data.dmLogReportDashboard
 ${whereClause};
 `.trim();
