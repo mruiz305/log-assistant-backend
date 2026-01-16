@@ -389,8 +389,7 @@ function buildKpiPackSql(message, opts = {}) {
     ? String(w.where || '').trim().slice(6).trim()
     : String(w.where || '').trim();
 
-  // ✅ IMPORTANTE: NO meter '' como primer elemento (eso te rompe el WHERE y afecta nombres)
-  const whereParts = [];
+    const whereParts = [];
   const params = [];
 
   if (timeClause) whereParts.push(timeClause);

@@ -1,6 +1,5 @@
 require('dotenv').config();
-const app = require('./app'); // ajusta si tu archivo se llama distinto
-
+const app = require('./app'); 
 const PORT = process.env.PORT || 4000;
 
 app.listen(PORT, () => {

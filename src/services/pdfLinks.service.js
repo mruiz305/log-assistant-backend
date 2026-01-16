@@ -4,6 +4,47 @@ function wantsPdfLinks(message = '') {
   );
 }
 
+async function findUserPdfCandidates(pool, text = '', limit = 8) {
+  const q = String(text || '').trim();
+  if (!q) return [];
+
+  const parts = q.split(/\s+/).filter(Boolean).slice(0, 3); // 
+  console.log('PDFLINKS_CANDIDATE_PARTS =>', parts);
+  const likeConds = parts
+    .map(() => `
+      (LOWER(TRIM(name)) LIKE CONCAT('%', LOWER(TRIM(?)), '%')
+       OR LOWER(TRIM(nick)) LIKE CONCAT('%', LOWER(TRIM(?)), '%'))
+    `.trim())
+    .join(' AND ');
+
+  const params = [];
+  for (const p of parts) params.push(p, p);
+
+  const sql = `
+    SELECT
+      id,
+      name,
+      nick,
+      email,
+      logsIndividualFile,
+      rosterIndividualFile
+    FROM stg_g_users
+    WHERE ${likeConds}
+    ORDER BY name ASC
+    LIMIT ${Number(limit) || 8}
+  `.trim();
+console.log('\nPDFLINKS_CANDIDATES_SQL =>', sql);
+console.log('PDFLINKS_CANDIDATES_PARAMS =>', params);
+  const [rows] = await pool.query(sql, params);
+
+  console.log('PDFLINKS_CANDIDATES_ROWS =>', rows);
+  return Array.isArray(rows) ? rows : [];
+}
+
+module.exports = {
+  findUserPdfCandidates,
+};
+
 
 function normalizeText(s = '') {
   return String(s || '')
@@ -16,46 +57,53 @@ function normalizeText(s = '') {
 }
 
 function extractPersonPhrase(message = '') {
-  // Intento: extraer lo que está entre "give me|dame|mostrar|show" y "log|logs|pdf|roster|report"
   const raw = String(message || '');
   const n = normalizeText(raw);
 
-  // patrones EN/ES
   const patterns = [
     /(?:give me|show me|get me)\s+(.*?)\s+(?:log|logs|pdf|roster|report|details)\b/i,
-    /(?:dame|muestrame|mostrar|ensename|quiero)\s+(.*?)\s+(?:log|logs|pdf|roster|reporte|report|detalles)\b/i,
+    /(?:dame|muestrame|muestrame|mostrar|ensename|quiero)\s+(.*?)\s+(?:log|logs|pdf|roster|reporte|report|detalles)\b/i,
   ];
 
   for (const rx of patterns) {
     const m = n.match(rx);
     if (m && m[1]) {
       const phrase = m[1].trim();
-      if (phrase.length >= 3) return phrase;
+      if (phrase.length >= 2) return phrase;
     }
   }
 
-  // fallback: quitar palabras típicas y quedarse con lo que parece nombre
+  // fallback: quita palabras típicas, pero OJO: aquí NO filtramos todavía
   return n
-    .replace(/\b(give|me|the|show|get|dame|el|la|los|las|de|del|para|por|un|una|log|logs|pdf|roster|reporte|report|details)\b/g, ' ')
+    .replace(
+      /\b(give|me|the|show|get|dame|el|la|los|las|de|del|para|por|un|una|log|logs|pdf|roster|reporte|report|details|detalles|completo)\b/g,
+      ' '
+    )
     .replace(/\s+/g, ' ')
     .trim();
 }
-
 function buildTokens(phrase = '') {
+  // stopwords (ES/EN)
   const stop = new Set([
-    'give','me','the','show','get','dame','muestrame','mostrar','quiero',
-    'log','logs','pdf','roster','reporte','report','details',
-    'de','del','la','el','los','las','por','para','un','una'
+    'give', 'me', 'the', 'show', 'get',
+    'dame', 'muestrame', 'mostrar', 'ensename', 'quiero',
+    'log', 'logs', 'pdf', 'roster', 'reporte', 'report', 'details', 'detalles', 'completo',
+    'de', 'del', 'la', 'el', 'los', 'las', 'por', 'para', 'un', 'una',
   ]);
 
   const tokens = normalizeText(phrase)
     .split(' ')
     .map((x) => x.trim())
-    .filter((x) => x.length >= 3 && !stop.has(x));
+    .filter(Boolean)
+    // ✅ clave: quitamos stopwords aunque sean cortas (como "de")
+    .filter((x) => !stop.has(x))
+    // ✅ clave: ignoramos tokens muy cortos
+    .filter((x) => x.length >= 2);
 
   // quita duplicados
   return [...new Set(tokens)];
 }
+
 
 /**
  * Resuelve un usuario desde stg_g_users.
@@ -66,69 +114,57 @@ function buildTokens(phrase = '') {
  * - Busca por tokens (AND) para tolerar variantes
  * - Ordena por score y trae el mejor
  */
-async function findUserPdfLinks(pool, text = '') {
+async function findUserPdfCandidates(pool, text = '', limit = 8) {
   const message = String(text || '').trim();
-  if (!message) return null;
+  if (!message) return [];
 
   const phrase = extractPersonPhrase(message);
   const tokens = buildTokens(phrase);
 
-  // Si no hay tokens útiles, no busques
-  if (!phrase || phrase.length < 3) return null;
+  console.log('\nPDFLINKS_LOOKUP =>', phrase);
+  console.log('PDFLINKS_CANDIDATE_PARTS =>', tokens);
 
-  // armamos condiciones por tokens (AND)
-  const tokenConds = [];
-  const tokenParams = [];
+  // si no hay tokens, no hay forma confiable
+  if (!tokens.length) return [];
 
-  for (const tk of tokens.slice(0, 4)) { // máximo 4 tokens para no exagerar
-    tokenConds.push(
-      `(LOWER(TRIM(name)) LIKE CONCAT('%', ?, '%') OR LOWER(TRIM(nick)) LIKE CONCAT('%', ?, '%'))`
-    );
-    tokenParams.push(tk, tk);
-  }
+  const andConds = tokens.slice(0, 4).map(() => {
+    return `(LOWER(TRIM(name)) LIKE CONCAT('%', LOWER(TRIM(?)), '%')
+          OR LOWER(TRIM(nick)) LIKE CONCAT('%', LOWER(TRIM(?)), '%'))`;
+  });
 
   const sql = `
     SELECT
-      email, name, nick, logsIndividualFile, rosterIndividualFile,
-
-      (
-        CASE
-          WHEN LOWER(TRIM(name)) = LOWER(TRIM(?)) THEN 100
-          WHEN LOWER(TRIM(nick)) = LOWER(TRIM(?)) THEN 95
-          WHEN LOWER(TRIM(name)) LIKE CONCAT('%', LOWER(TRIM(?)), '%') THEN 80
-          WHEN LOWER(TRIM(nick)) LIKE CONCAT('%', LOWER(TRIM(?)), '%') THEN 75
-          ELSE 0
-        END
-        +
-        ${tokenConds.length ? `(${tokenConds.map(() => '10').join(' + ')})` : '0'}
-      ) AS score
-
+      id,
+      name,
+      nick,
+      email,
+      logsIndividualFile,
+      rosterIndividualFile
     FROM stg_g_users
-    WHERE
-      LOWER(TRIM(name)) = LOWER(TRIM(?))
-      OR LOWER(TRIM(nick)) = LOWER(TRIM(?))
-      OR LOWER(TRIM(name)) LIKE CONCAT('%', LOWER(TRIM(?)), '%')
-      OR LOWER(TRIM(nick)) LIKE CONCAT('%', LOWER(TRIM(?)), '%')
-      ${tokenConds.length ? `OR (${tokenConds.join(' AND ')})` : ''}
-
-    ORDER BY score DESC
-    LIMIT 1
+    WHERE ${andConds.join(' AND ')}
+    ORDER BY name ASC
+    LIMIT ${Number(limit) || 8}
   `.trim();
 
-  const params = [
-    phrase, phrase, phrase, phrase, // score checks
-    phrase, phrase, phrase, phrase, // WHERE checks
-    ...tokenParams,                 // tokens
-  ];
+  const params = [];
+  for (const tk of tokens.slice(0, 4)) params.push(tk, tk);
 
-  console.log('\nPDFLINKS_LOOKUP_MESSAGE =>', message);
-  console.log('PDFLINKS_EXTRACTED_PHRASE =>', phrase);
-  console.log('PDFLINKS_TOKENS =>', tokens);
-  console.log('PDFLINKS_SQL =>', sql);
-  console.log('PDFLINKS_PARAMS =>', params);
+  console.log('\nPDFLINKS_CANDIDATES_SQL =>', sql);
+  console.log('PDFLINKS_CANDIDATES_PARAMS =>', params);
 
-  const [u] = await pool.query(sql, params);
-  return u && u[0] ? u[0] : null;
+  const [rows] = await pool.query(sql, params);
+  console.log('PDFLINKS_CANDIDATES_ROWS =>', Array.isArray(rows) ? rows.length : 0);
+
+  return Array.isArray(rows) ? rows : [];
 }
 
-module.exports = { wantsPdfLinks, findUserPdfLinks };
+async function findUserPdfLinks(pool, text = '') {
+  const cands = await findUserPdfCandidates(pool, text, 8);
+  return cands && cands[0] ? cands[0] : null;
+}
+
+module.exports = {
+  wantsPdfLinks,
+  findUserPdfLinks,
+  findUserPdfCandidates,
+};

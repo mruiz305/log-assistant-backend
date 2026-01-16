@@ -8,6 +8,8 @@ const { makeRateLimiter } = require('./middlewares/rateLimit.middleware');
 const { errorMiddleware } = require('./middlewares/error.middleware');
 
 const chatRoute = require('./routes/chat.route');
+const authRoute = require('./routes/auth.routes'); 
+const dashboardRoute = require('./routes/dashboard.route');
 
 const app = express();
 
@@ -42,6 +44,8 @@ app.use('/api/', makeRateLimiter());
 
 // 6) routes
 app.use('/api', chatRoute);
+app.use('/api/auth', authRoute);
+app.use('/api/dashboard', dashboardRoute);
 
 // 7) error handler (último)
 app.use(errorMiddleware);

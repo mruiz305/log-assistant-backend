@@ -1,3 +1,4 @@
+// services/ownerAnswer.service.js  (o el archivo donde tengas esto)
 const openai = require('../infra/openai.client');
 const { sanitizeRowsForSummary } = require('./summarySanitizer.service');
 const { classifyIntent } = require('./intent');
@@ -11,13 +12,21 @@ function wantsExpertAnalysis(q = '') {
   );
 }
 
+/**
+ * ✅ Prompt builder (versión menos “robótica”):
+ * - Permite 1 línea inicial de contexto (no bullet)
+ * - Bullets más largos (más naturales)
+ * - Números requeridos solo en 2 bullets (normal) / en la mayoría (experto)
+ * - Menos meta-texto (INTENT_DETECTADO, RowCount, SQL) para no contaminar el tono
+ * - Incluye 1 ejemplo de salida
+ */
 function buildPrompt({
   lang,
   today,
   dayOfMonth,
   question,
   intent,
-  sql,
+  sql, // solo referencia: lo minimizamos para no “robotizar”
   rowCount,
   payload,
   kpiWindow,
@@ -31,24 +40,24 @@ function buildPrompt({
   const who = userName ? (isEs ? `Usuario: ${userName}.` : `User: ${userName}.`) : '';
   const hello = userName ? `${assistantGreeting}, ${userName}.` : `${assistantGreeting}.`;
 
-  // ✅ Boolean real
   const hasPeriod = Boolean(kpiWindow && String(kpiWindow).trim());
 
-  // ✅ Solo mostramos “Periodo/Period” si existe (y nunca "N/A")
+  // Solo mostramos Periodo si existe (sin N/A)
   const periodLine = hasPeriod
-    ? (isEs ? `Periodo:\n${kpiWindow}\n` : `Period:\n${kpiWindow}\n`)
+    ? (isEs ? `Periodo: ${kpiWindow}` : `Period: ${kpiWindow}`)
     : '';
 
-  // ✅ Regla del primer bullet SOLO si hay periodo; si no hay, NO mencionar “sin filtro de tiempo”
-  const firstBulletRule = hasPeriod
+  // Primera línea opcional (solo si hay periodo)
+  const firstLineRule = hasPeriod
     ? (isEs
-        ? `- El PRIMER bullet debe empezar con el periodo: "ℹ️ ${kpiWindow}: ..."\n`
-        : `- The FIRST bullet must start with the period: "ℹ️ ${kpiWindow}: ..."\n`)
+        ? `- La PRIMERA línea (no bullet) puede ser: "ℹ️ ${kpiWindow}: ..." (opcional).`
+        : `- The FIRST line (not a bullet) may be: "ℹ️ ${kpiWindow}: ..." (optional).`)
     : (isEs
-        ? `- NO menciones "sin filtro de tiempo" ni inventes periodos.\n`
-        : `- Do NOT mention "no time filter" or invent periods.\n`);
+        ? `- No inventes periodos ni menciones "sin filtro de tiempo".`
+        : `- Do not invent periods or mention "no time filter".`);
 
-  // ✅ Cabecera común (ES/EN)
+  // ✅ Cabecera “humana” (menos meta)
+  // NOTA: dejamos intent/sql/rowCount fuera del “texto principal”; se van a un bloque interno reducido.
   const header = isEs
     ? `
 Asistente: ${assistantName}.
@@ -61,13 +70,9 @@ Hoy es ${today} (día ${dayOfMonth}).
 Pregunta:
 "${question}"
 
-INTENT_DETECTADO: ${intent}
+${periodLine ? `${periodLine}\n` : ''}
 
-SQL (solo referencia, NO lo repitas):
-${(sql || '').toString().slice(0, 1200)}
-
-RowCount: ${rowCount}
-${periodLine}Datos (payload):
+Contexto (resumen de datos):
 ${payload}
 `.trim()
     : `
@@ -81,138 +86,160 @@ Today is ${today} (day ${dayOfMonth}).
 Question:
 "${question}"
 
-DETECTED_INTENT: ${intent}
+${periodLine ? `${periodLine}\n` : ''}
 
-SQL (reference only, DO NOT repeat it):
-${(sql || '').toString().slice(0, 1200)}
-
-RowCount: ${rowCount}
-${periodLine}Data (payload):
+Context (data summary):
 ${payload}
 `.trim();
 
+  // ✅ Reglas de negocio (las mantenemos, pero sin gritar)
   const businessRules = isEs
     ? `
-REGLAS DE NEGOCIO (CLAVE):
-- Confirmed=1 = CASOS CONFIRMADOS (confirmed_cases). NO es "Case converted".
+Reglas de negocio clave:
+- Confirmed=1 = casos confirmados (confirmed_cases). No es "case converted".
 - "Conversion value" del dashboard = case_converted_value = SUM(convertedValue) (crédito/valor).
-- Status/ClinicalStatus = salud operativa (Problem/Dropped/Ref Out). NO invalida confirmados ni crédito.
-- Dropped SUBE = MALO (🔴/🟡). Dropped BAJA = BUENO (🟢). Nunca “inestable” si baja.
+- Status/ClinicalStatus describe salud operativa (Problem/Dropped/Ref Out) y NO invalida confirmados ni crédito.
+- Dropped sube = malo; Dropped baja = bueno.
 `.trim()
     : `
-BUSINESS RULES (CRITICAL):
-- Confirmed=1 = CONFIRMED CASES (confirmed_cases). NOT "Case converted".
-- "Conversion value" in dashboard = case_converted_value = SUM(convertedValue) (credit/value).
-- Status/ClinicalStatus = operational health (Problem/Dropped/Ref Out). Does NOT invalidate confirmed or credit.
-- Dropped UP = BAD (🔴/🟡). Dropped DOWN = GOOD (🟢). Never say “unstable” if dropping.
+Key business rules:
+- Confirmed=1 = confirmed cases (confirmed_cases). Not "case converted".
+- "Conversion value" = case_converted_value = SUM(convertedValue) (credit/value).
+- Status/ClinicalStatus is operational health (Problem/Dropped/Ref Out); it does NOT invalidate confirmed or credit.
+- Dropped up = bad; Dropped down = good.
 `.trim();
 
   const baseline = isEs
     ? `
-BASELINE (KPI PACK):
-- Si kpiPack existe: úsalo como números base:
-  gross_cases, confirmed_cases, confirmed_rate, case_converted_value, dropped_rate, problem_rate.
-- Si kpiPack contradice el sample: prioriza kpiPack (baseline del periodo).
+Baseline:
+- Si existe kpiPack: úsalo como números base (gross_cases, confirmed_cases, confirmed_rate, case_converted_value, dropped_rate, problem_rate).
+- Si kpiPack contradice el sample: prioriza kpiPack.
 `.trim()
     : `
-BASELINE (KPI PACK):
-- If kpiPack exists: use it as baseline numbers:
-  gross_cases, confirmed_cases, confirmed_rate, case_converted_value, dropped_rate, problem_rate.
-- If kpiPack contradicts sample: prioritize kpiPack (period baseline).
+Baseline:
+- If kpiPack exists: use it as baseline (gross_cases, confirmed_cases, confirmed_rate, case_converted_value, dropped_rate, problem_rate).
+- If kpiPack contradicts sample: prioritize kpiPack.
 `.trim();
 
   const intentRules = isEs
     ? `
-INTENCIÓN:
-- Si intent=cnv: di "confirmados" y "tasa de confirmación"; NUNCA "convertidos/conversión".
-- Si intent=health: prioriza Problem/Dropped y tasas (%).
-- Si intent=mix: menciona confirmados + leakage (confirmados con Problem/Dropped/Clinical dropped) y crédito.
+Intención:
+- intent=cnv: usa "confirmados" y "tasa de confirmación".
+- intent=health: prioriza Problem/Dropped y sus tasas.
+- intent=mix: menciona confirmados + leakage (confirmados con Problem/Dropped/Clinical dropped) y crédito.
 `.trim()
     : `
-INTENT:
-- If intent=cnv: say "confirmed" and "confirmation rate"; NEVER "converted/conversion".
-- If intent=health: prioritize Problem/Dropped and rates (%).
-- If intent=mix: mention confirmed + leakage (confirmed with Problem/Dropped/Clinical dropped) and credit.
+Intent:
+- intent=cnv: use "confirmed" and "confirmation rate".
+- intent=health: prioritize Problem/Dropped and rates.
+- intent=mix: mention confirmed + leakage (confirmed with Problem/Dropped/Clinical dropped) and credit.
 `.trim();
 
   const roleMap = isEs
     ? `
-MAPA DE ROLES (OBLIGATORIO):
-- "submitter", "representante", "agent", "rep", "entered by" => submitterName/submitter
-- "intake", "intake specialist", "locked down" => intakeSpecialist
-- "attorney", "abogado" => attorney
-- "office", "oficina" => OfficeName
-- "team", "equipo" => TeamName
-- "pod" => PODEName
-- "region" => RegionName
-- "director" => DirectorName
+Mapa de roles:
+- submitter/representante/agent/rep/entered by => submitterName/submitter
+- intake/intake specialist/locked down => intakeSpecialist
+- attorney/abogado => attorney
+- office/oficina => OfficeName
+- team/equipo => TeamName
+- pod => PODEName
+- region => RegionName
+- director => DirectorName
 `.trim()
     : `
-ROLE MAPPING (MANDATORY):
-- "submitter", "agent", "rep", "entered by" => submitterName/submitter
-- "intake", "intake specialist", "locked down" => intakeSpecialist
-- "attorney", "lawyer" => attorney
-- "office" => OfficeName
-- "team" => TeamName
-- "pod" => PODEName
-- "region" => RegionName
-- "director" => DirectorName
+Role mapping:
+- submitter/agent/rep/entered by => submitterName/submitter
+- intake/intake specialist/locked down => intakeSpecialist
+- attorney/lawyer => attorney
+- office => OfficeName
+- team => TeamName
+- pod => PODEName
+- region => RegionName
+- director => DirectorName
 `.trim();
 
   const note = isEs
     ? `
-NOTA:
-- Si el dataset trae columnas anio/mes (agrupado), habla en términos de tendencia.
-- Si trae columnas por OfficeName/TeamName, menciona top 1-2 y magnitud.
-- Si mencionas una tasa (%), incluye numerador y denominador (ej: 18 de 803).
+Notas:
+- Si hay anio/mes (agrupado), habla de tendencia.
+- Si hay OfficeName/TeamName, menciona top 1–2 con magnitud.
+- Si das una tasa (%), intenta incluir numerador/denominador (ej: 18 de 803).
 `.trim()
     : `
-NOTE:
-- If dataset includes year/month columns (grouped), speak in trend terms.
+Notes:
+- If grouped by year/month, speak in trends.
 - If grouped by OfficeName/TeamName, mention top 1–2 with magnitude.
-- If you mention a rate (%), include numerator and denominator (e.g., 18 of 803).
+- If you state a rate (%), try to include numerator/denominator (e.g., 18 of 803).
 `.trim();
 
+  // ✅ Terminología (suave)
   const terminology = isEs
     ? `
-REGLAS DE TERMINOLOGÍA:
-- PROHIBIDO usar: "convertido", "convertidos", "conversión", "tasa de conversión".
-- Debes usar SIEMPRE: "confirmados" y "tasa de confirmación".
-- Si el usuario dice "convertido": corrige el término y responde usando "confirmado".
+Terminología preferida:
+- Usa "confirmados" y "tasa de confirmación" como términos estándar.
+- Si el usuario dice "convertido/conversión", aclara con tacto y responde usando "confirmado/confirmación".
 `.trim()
     : `
-TERMINOLOGY:
-- FORBIDDEN: "converted", "conversion", "conversion rate", "CNV".
-- Always use: "confirmed" and "confirmation rate".
-- If user says "converted", correct the term and respond using "confirmed".
+Preferred terminology:
+- Use "confirmed" and "confirmation rate" as standard terms.
+- If the user says "converted/conversion", gently clarify and answer using "confirmed/confirmation".
 `.trim();
 
-  // ✅ EXPERT vs NORMAL
+  // ✅ Ejemplo (muy importante para “naturalidad”)
+  const example = isEs
+    ? `
+Ejemplo de salida (solo para guiar estilo):
+ℹ️ Últimos 7 días: 803 casos; 18 confirmados (2.2%).
+- 🟡 Confirmación baja: 18/803; revisa calidad de intake en top 2 oficinas.
+- 🎯 Hoy: audita 10 confirmados con Problem/Dropped y corrige causa raíz.
+- 🟢 Dropped bajó 0.8 pts; mantén el mismo flujo de seguimiento.
+`.trim()
+    : `
+Example output (style guide):
+ℹ️ Last 7 days: 803 cases; 18 confirmed (2.2%).
+- 🟡 Low confirmation: 18/803; review intake quality in top 2 offices.
+- 🎯 Today: audit 10 confirmed with Problem/Dropped and fix root cause.
+- 🟢 Dropped down 0.8 pts; keep the same follow-up flow.
+`.trim();
+
+  // ✅ Bloque “interno” mínimo (para que no contamine el tono)
+  // Si quieres, puedes apagarlo por completo.
+  const internalTiny = isEs
+    ? `
+(Interno, no citar):
+- intent=${intent}; rowCount=${rowCount}
+- sql_ref=${String(sql || '').slice(0, 220)}
+`.trim()
+    : `
+(Internal, do not quote):
+- intent=${intent}; rowCount=${rowCount}
+- sql_ref=${String(sql || '').slice(0, 220)}
+`.trim();
+
+  // ✅ EXPERT
   if (expertAnalysis) {
     return `
 ${header}
 
-${isEs ? 'MODO: ANALISIS_EXPERTO' : 'MODE: EXPERT_ANALYSIS'}
+Modo: análisis experto (directo, humano, sin jerga técnica).
 
-${isEs ? 'REGLAS (FORMATO):' : 'FORMAT RULES:'}
-- ${isEs ? 'Devuelve SOLO bullets (una línea por bullet).' : 'Output ONLY bullets (one per line).'}
-- ${isEs ? 'Entre 6 y 9 bullets.' : '6 to 9 bullets.'}
-- ${isEs ? 'Cada bullet ≤ 26 palabras.' : 'Each bullet ≤ 26 words.'}
-${firstBulletRule}- ${isEs ? 'Cada bullet debe incluir al menos 1 número (cantidad o %).' : 'Each bullet must include at least 1 number (count or %).'}
-- ${isEs ? 'Si mencionas una tasa (%), incluye numerador y denominador (ej: 18 de 803).' : 'If you state a rate (%), include numerator/denominator (e.g., 18 of 803).'}
-- ${isEs ? 'TODOS los números deben usar separación de miles con coma.' : 'Use thousands separators with commas.'}
-- ${isEs ? 'Usar punto solo para decimales.' : 'Use dot only for decimals.'}
-- ${isEs ? 'NO usar símbolos de moneda.' : 'No currency symbols.'}
-- ${isEs
-        ? 'Iconos: 🔎 diagnóstico | 🎯 acción | 🔴 riesgo | 🟡 atención | 🟢 positivo | ℹ️ informativo | ❓ siguiente paso'
-        : 'Icons: 🔎 diagnosis | 🎯 action | 🔴 risk | 🟡 watch | 🟢 positive | ℹ️ info | ❓ next step'}
+Guías de formato:
+${firstLineRule}
+- Devuelve 6–9 bullets (una línea por bullet).
+- Cada bullet ≤ 28 palabras.
+- Incluye números cuando aporten claridad; al menos 5 bullets deben tener 1 número o %.
+- Si mencionas una tasa (%), intenta incluir numerador/denominador (ej: 18 de 803).
+- Usa separador de miles con coma (1,234) y punto solo para decimales (12.3).
+- No uses símbolos de moneda.
+- Iconos sugeridos: 🔎 diagnóstico | 🎯 acción | 🔴 riesgo | 🟡 atención | 🟢 positivo | ℹ️ info | ❓ siguiente paso
 
-${isEs ? 'CONTENIDO OBLIGATORIO:' : 'REQUIRED CONTENT:'}
-- ${isEs ? '1 bullet de lectura ejecutiva (qué está pasando).' : '1 executive read bullet (what’s happening).'}
-- ${isEs ? '1 bullet de diagnóstico (qué sugiere el patrón).' : '1 diagnosis bullet (what the pattern suggests).'}
-- ${isEs ? '2 bullets de acciones concretas (qué hacer hoy / esta semana).' : '2 concrete action bullets (what to do today / this week).'}
-- ${isEs ? '1 bullet de riesgo/alerta (si aplica).' : '1 risk/alert bullet (if applicable).'}
-- ${isEs ? '1 bullet con pregunta inteligente de siguiente paso.' : '1 smart next-step question bullet.'}
+Contenido recomendado:
+- 1 bullet lectura ejecutiva (qué pasa).
+- 1 bullet diagnóstico (qué sugiere).
+- 2 bullets acciones concretas (hoy / esta semana).
+- 1 bullet riesgo/alerta (si aplica).
+- 1 bullet con pregunta inteligente de siguiente paso.
 
 ${terminology}
 
@@ -225,31 +252,27 @@ ${baseline}
 ${roleMap}
 
 ${note}
+
+${example}
+
+${internalTiny}
 `.trim();
   }
 
-  // ✅ NORMAL
+  // ✅ NORMAL (menos “robot”)
   return `
 ${header}
 
-${isEs ? 'REGLAS CRÍTICAS (FORMATO):' : 'CRITICAL FORMAT RULES:'}
-${firstBulletRule}- ${isEs ? 'Máximo 4 bullets.' : 'Max 4 bullets.'}
-- ${isEs ? 'Cada bullet ≤ 16 palabras.' : 'Each bullet ≤ 16 words.'}
-- ${isEs ? 'Cada bullet debe incluir al menos 1 número (cantidad o %).' : 'Each bullet must include at least 1 number (count or %).'}
-- ${isEs ? 'TODOS los números deben usar separación de miles con coma.' : 'ALL numbers must use thousands separators with commas.'}
-- ${isEs ? 'Usar punto solo para decimales.' : 'Use dot only for decimals.'}
-- ${isEs ? 'NO usar símbolos de moneda.' : 'Do NOT use currency symbols.'}
-- ${isEs ? 'NO usar frases vagas.' : 'No vague wording.'}
-${isEs ? `- Si incluye MES ACTUAL y hoy es antes del día 7:
-  - usar ℹ️ "datos parciales"
-  - NO declarar caídas vs meses cerrados` : `- If current month and today is before day 7:
-  - use ℹ️ "partial data"
-  - do NOT claim drops vs closed months`}
-- ${isEs
-        ? 'Iconos: 🔴 problema real | 🟡 atención | 🟢 positivo | ℹ️ informativo'
-        : 'Icons: 🔴 real issue | 🟡 attention | 🟢 positive | ℹ️ informative'}
-- ${isEs ? 'Si no hay números útiles: "ℹ️ Sin datos suficientes para concluir."' : 'If no useful numbers: "ℹ️ Not enough data to conclude."'}
-- ${isEs ? 'Devuelve SOLO bullets (una línea por bullet).' : 'Output ONLY bullets (one line per bullet).'}
+Guías de formato (naturales, pero concisas):
+${firstLineRule}
+- Puedes usar 1 línea inicial (no bullet) para contexto.
+- Devuelve 3–5 bullets (una línea por bullet).
+- Cada bullet ≤ 24 palabras.
+- Al menos 2 bullets deben incluir 1 número o % (no todos).
+- Usa separador de miles con coma (1,234) y punto solo para decimales (12.3).
+- No uses símbolos de moneda.
+- Evita generalidades; sé específico cuando puedas.
+- Iconos sugeridos: 🔴 problema | 🟡 atención | 🟢 positivo | ℹ️ info
 
 ${terminology}
 
@@ -262,38 +285,49 @@ ${baseline}
 ${roleMap}
 
 ${note}
+
+${example}
+
+${internalTiny}
 `.trim();
 }
 
+/**
+ * ✅ Post-proceso de terminología (menos agresivo)
+ * - Ya NO reemplaza "conversión" en cualquier contexto
+ * - Solo arregla frases KPI típicas
+ * - Evita borrar "cnv" si está pegado a otra palabra
+ */
 function postProcessTerminology(out, lang) {
   let s = String(out || '').trim();
 
   if (lang === 'es') {
-    return s
-      .replace(/\btasa\s+de\s+conversi[oó]n\s*\(cnv\)\b/gi, 'tasa de confirmación')
+    s = s
+      // casos típicos KPI
       .replace(/\btasa\s+de\s+conversi[oó]n\b/gi, 'tasa de confirmación')
-      .replace(/\bconversi[oó]n(es)?\b/gi, 'confirmación')
-      .replace(/\bconvertidos?\b/gi, 'confirmados')
-      .replace(/\b\(?cnv\)?\b/gi, '')
-      .replace(/\s{2,}/g, ' ')
-      .replace(/\(\s*\)/g, '')
-      .trim();
+      .replace(/\bconversion\s+value\b/gi, 'valor de crédito')
+      // "convertidos" cuando claramente se refiere a casos
+      .replace(/\bcasos?\s+convertidos?\b/gi, 'casos confirmados')
+      .replace(/\bconvertidos?\b/gi, 'confirmados');
+
+    // limpia tokens sueltos "(CNV)" o "CNV" cuando aparezcan aislados
+    s = s.replace(/(\(|\s)\s*cnv\s*(\)|\s)/gi, ' ').replace(/\s{2,}/g, ' ').trim();
+    return s;
   }
 
-  return s
+  s = s
     .replace(/\bconversion\s+rate\b/gi, 'confirmation rate')
-    .replace(/\bconversion\b/gi, 'confirmation')
-    .replace(/\bconversions\b/gi, 'confirmations')
-    .replace(/\bconverted\b/gi, 'confirmed')
-    .replace(/\bconvert\b/gi, 'confirm')
-    .replace(/\b\(?cnv\)?\b/gi, '')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/\(\s*\)/g, '')
-    .trim();
+    .replace(/\bconversion\s+value\b/gi, 'credit value')
+    .replace(/\bconverted\s+cases\b/gi, 'confirmed cases')
+    .replace(/\bconverted\b/gi, 'confirmed');
+
+  s = s.replace(/(\(|\s)\s*cnv\s*(\)|\s)/gi, ' ').replace(/\s{2,}/g, ' ').trim();
+  return s;
 }
 
 function formatThousandsInText(text = '') {
   return String(text || '').replace(/\b(\d{4,})\b/g, (m) => {
+    // no tocar años
     if (/^(19|20)\d{2}$/.test(m)) return m;
     return m.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   });
@@ -340,14 +374,15 @@ async function buildOwnerAnswer(question, sql, rows, meta = {}) {
 
   const response = await openai.responses.create({
     model: 'gpt-4.1-mini',
-    max_output_tokens: expertAnalysis ? 320 : 170,
+    // ✅ más tokens para que suene humano (menos telegráfico)
+    max_output_tokens: expertAnalysis ? 420 : 260,
     input: [
       {
         role: 'system',
         content:
           lang === 'es'
-            ? `Tu nombre es ${profile.name}. Eres un asesor ejecutivo de operaciones. ${profile.style}`
-            : `Your name is ${profile.name}. You are an executive operations advisor. ${profile.style}`,
+            ? `Tu nombre es ${profile.name}. Eres un asesor ejecutivo de operaciones. Habla claro, natural y directo. ${profile.style}`
+            : `Your name is ${profile.name}. You are an executive operations advisor. Speak clearly, naturally, and directly. ${profile.style}`,
       },
       { role: 'user', content: prompt },
     ],
@@ -356,7 +391,7 @@ async function buildOwnerAnswer(question, sql, rows, meta = {}) {
   const raw = response.output?.[0]?.content?.[0]?.text || '';
   let cleaned = postProcessTerminology(raw, lang);
 
-  // ✅ si NO hay kpiWindow, eliminamos cualquier frase "sin filtro de tiempo"
+  // ✅ si NO hay kpiWindow, eliminamos cualquier frase “sin filtro de tiempo”
   if (!meta?.kpiWindow || !String(meta.kpiWindow).trim()) {
     cleaned = cleaned
       .split('\n')

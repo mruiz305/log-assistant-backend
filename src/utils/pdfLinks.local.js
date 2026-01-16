@@ -20,18 +20,54 @@ function extractNameFromLogRequest(message = '') {
   return cleaned.length >= 3 ? cleaned : null;
 }
 
+/**
+ * Convierte un nombre “sucio” en tokens útiles para búsqueda:
+ * - soporta "Apellido, Nombre"
+ * - quita signos/puntos
+ * - separa por espacios / coma / guión
+ * - elimina tokens muy cortos (ej: "a", "de")
+ */
+function tokenizeName(raw = '') {
+  const s = String(raw || '')
+    .trim()
+    .toLowerCase()
+    // convierte coma/guion a espacio para tokenizar
+    .replace(/[,/\\|]+/g, ' ')
+    .replace(/[-]+/g, ' ')
+    // quita puntos y signos raros
+    .replace(/[.()]/g, ' ')
+    .replace(/[^\p{L}\p{N}\s']/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!s) return [];
+
+  const tokens = s
+    .split(/\s+/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    // descarta tokens muy cortos (pero deja "li", "al" si te sirve)
+    .filter((x) => x.length >= 2)
+    // corta a máximo 4 para no volver la query muy estricta
+    .slice(0, 4);
+
+  return tokens;
+}
+
 async function findSubmitterCandidates(pool, rawName, limit = 8) {
   const name = String(rawName || '').trim();
   if (!name) return [];
 
-  const parts = name.split(/\s+/).filter(Boolean).slice(0, 3);
+  // ✅ tokens por palabra (soporta coma / invertidos / guiones)
+  const parts = tokenizeName(name);
   if (parts.length === 0) return [];
 
+  // AND por tokens => “busca por palabra”, independiente del orden
   const likeConds = parts
     .map(
       () => `
-    LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter))) LIKE CONCAT('%', LOWER(TRIM(?)), '%')
-  `
+        LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter))) LIKE CONCAT('%', LOWER(TRIM(?)), '%')
+      `
     )
     .join(' AND ');
 
@@ -49,4 +85,5 @@ async function findSubmitterCandidates(pool, rawName, limit = 8) {
   const [rows] = await pool.query(sql, parts);
   return Array.isArray(rows) ? rows : [];
 }
+
 module.exports = { wantsLinksLocal, extractNameFromLogRequest, findSubmitterCandidates };

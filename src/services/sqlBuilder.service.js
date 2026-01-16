@@ -390,7 +390,7 @@ DirectorName, RegionName, OfficeName, PODEName, TeamName, officeLabel.
 - Cuando filtres por nombres: usa LIKE con LOWER(TRIM()) (no igualdad exacta), salvo que el usuario pida exact match.
 
 Debes devolver JSON EXACTO:
-{
+{ 
   "sql": "...",
   "comment": "..."
 }
