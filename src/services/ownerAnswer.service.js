@@ -1,4 +1,3 @@
-// services/ownerAnswer.service.js  (o el archivo donde tengas esto)
 const openai = require('../infra/openai.client');
 const { sanitizeRowsForSummary } = require('./summarySanitizer.service');
 const { classifyIntent } = require('./intent');
@@ -12,13 +11,65 @@ function wantsExpertAnalysis(q = '') {
   );
 }
 
+function detectAnswerMode(rows, meta = {}) {
+  if (meta?.mode) return String(meta.mode).toLowerCase();
+
+  const r = Array.isArray(rows) && rows[0] ? rows[0] : null;
+  if (!r) return 'default';
+
+  const keys = Object.keys(r).map((k) => k.toLowerCase());
+
+  // Performance KPI rows típicos
+  const isPerf =
+    keys.includes('ttd') ||
+    keys.includes('confirmationrate') ||
+    keys.includes('convertedvalue') ||
+    keys.includes('dropped_rate') ||
+    keys.includes('dropped_cases');
+
+  return isPerf ? 'performance' : 'default';
+}
+
+function buildPerformanceHintFromRows(rows) {
+  const top = Array.isArray(rows) ? rows.slice(0, 10) : [];
+  const normalized = top.map((r) => ({
+    name:
+      r.name ??
+      r.submitterName ??
+      r.submitter ??
+      r.OfficeName ??
+      r.TeamName ??
+      r.PODEName ??
+      r.RegionName ??
+      null,
+    ttd: r.ttd ?? null,
+    confirmed: r.confirmed ?? r.confirmed_cases ?? null,
+    confirmationRate: r.confirmationRate ?? r.confirmed_rate ?? null,
+    dropped_cases: r.dropped_cases ?? null,
+    dropped_rate: r.dropped_rate ?? null,
+    convertedValue: r.convertedValue ?? r.case_converted_value ?? null,
+  }));
+
+  return JSON.stringify(
+    {
+      performance_schema: {
+        ttd: 'total cases (count)',
+        confirmed: 'confirmed cases',
+        confirmationRate: 'confirmed/ttd * 100',
+        dropped_cases: 'dropped cases',
+        dropped_rate: 'dropped/ttd * 100',
+        convertedValue: 'SUM(convertedValue)',
+      },
+      top10: normalized,
+      note: 'If there is only 1 row, summarize only that entity. If there are multiple, highlight top performers + outliers.',
+    },
+    null,
+    2
+  ).slice(0, 5000);
+}
+
 /**
- * ✅ Prompt builder (versión menos “robótica”):
- * - Permite 1 línea inicial de contexto (no bullet)
- * - Bullets más largos (más naturales)
- * - Números requeridos solo en 2 bullets (normal) / en la mayoría (experto)
- * - Menos meta-texto (INTENT_DETECTADO, RowCount, SQL) para no contaminar el tono
- * - Incluye 1 ejemplo de salida
+ * ✅ Prompt builder
  */
 function buildPrompt({
   lang,
@@ -26,7 +77,7 @@ function buildPrompt({
   dayOfMonth,
   question,
   intent,
-  sql, // solo referencia: lo minimizamos para no “robotizar”
+  sql,
   rowCount,
   payload,
   kpiWindow,
@@ -35,29 +86,24 @@ function buildPrompt({
   assistantStyle,
   assistantGreeting,
   expertAnalysis,
+  answerMode,
+  modeHint,
 }) {
   const isEs = lang === 'es';
   const who = userName ? (isEs ? `Usuario: ${userName}.` : `User: ${userName}.`) : '';
   const hello = userName ? `${assistantGreeting}, ${userName}.` : `${assistantGreeting}.`;
 
   const hasPeriod = Boolean(kpiWindow && String(kpiWindow).trim());
+  const periodLine = hasPeriod ? (isEs ? `Periodo: ${kpiWindow}` : `Period: ${kpiWindow}`) : '';
 
-  // Solo mostramos Periodo si existe (sin N/A)
-  const periodLine = hasPeriod
-    ? (isEs ? `Periodo: ${kpiWindow}` : `Period: ${kpiWindow}`)
-    : '';
-
-  // Primera línea opcional (solo si hay periodo)
   const firstLineRule = hasPeriod
-    ? (isEs
-        ? `- La PRIMERA línea (no bullet) puede ser: "ℹ️ ${kpiWindow}: ..." (opcional).`
-        : `- The FIRST line (not a bullet) may be: "ℹ️ ${kpiWindow}: ..." (optional).`)
-    : (isEs
-        ? `- No inventes periodos ni menciones "sin filtro de tiempo".`
-        : `- Do not invent periods or mention "no time filter".`);
+    ? isEs
+      ? `- La PRIMERA línea (no bullet) puede ser: "ℹ️ ${kpiWindow}: ..." (opcional).`
+      : `- The FIRST line (not a bullet) may be: "ℹ️ ${kpiWindow}: ..." (optional).`
+    : isEs
+      ? `- No inventes periodos ni menciones "sin filtro de tiempo".`
+      : `- Do not invent periods or mention "no time filter".`;
 
-  // ✅ Cabecera “humana” (menos meta)
-  // NOTA: dejamos intent/sql/rowCount fuera del “texto principal”; se van a un bloque interno reducido.
   const header = isEs
     ? `
 Asistente: ${assistantName}.
@@ -92,21 +138,42 @@ Context (data summary):
 ${payload}
 `.trim();
 
-  // ✅ Reglas de negocio (las mantenemos, pero sin gritar)
   const businessRules = isEs
     ? `
 Reglas de negocio clave:
 - Confirmed=1 = casos confirmados (confirmed_cases). No es "case converted".
-- "Conversion value" del dashboard = case_converted_value = SUM(convertedValue) (crédito/valor).
+- "Conversion value" del dashboard = case_converted_value = SUM(convertedValue) (valor de crédito).
+- "Valor de crédito" es un MONTO (no una unidad).
+- Para "valor de crédito" (convertedValue / case_converted_value): escribe SOLO el número (ej: "valor de crédito: 40.31").
+- NO agregues "unidades", "pts", "puntos" ni etiquetas de unidad. NO inventes unidad.
+- Si el valor es 0 o nulo, dilo como "valor de crédito: 0".
 - Status/ClinicalStatus describe salud operativa (Problem/Dropped/Ref Out) y NO invalida confirmados ni crédito.
 - Dropped sube = malo; Dropped baja = bueno.
 `.trim()
     : `
 Key business rules:
 - Confirmed=1 = confirmed cases (confirmed_cases). Not "case converted".
-- "Conversion value" = case_converted_value = SUM(convertedValue) (credit/value).
+- "Conversion value" = case_converted_value = SUM(convertedValue) (credit value).
+- "Credit value" is an AMOUNT (not a unit).
+- For "credit value" (convertedValue / case_converted_value): write ONLY the number (e.g., "credit value: 40.31").
+- Do NOT add "units", "pts", "points", or any unit label. Do NOT invent a unit.
+- If the value is 0 or null, say "credit value: 0".
 - Status/ClinicalStatus is operational health (Problem/Dropped/Ref Out); it does NOT invalidate confirmed or credit.
 - Dropped up = bad; Dropped down = good.
+`.trim();
+
+  // ✅ NUEVO: Reglas específicas para "valor de crédito" (bilingüe)
+  // (para usarlas en el bloque de "Guías de formato" sin dejar español suelto)
+  const creditValueRules = isEs
+    ? `
+- Para "valor de crédito" (convertedValue / case_converted_value): escribe SOLO el número (ej: "valor de crédito: 40.31").
+- NO agregues "unidades", "pts", "puntos" ni etiquetas de unidad. NO inventes unidad.
+- Si el valor es 0 o nulo, dilo como "valor de crédito: 0".
+`.trim()
+    : `
+- For "credit value" (convertedValue / case_converted_value): write ONLY the number (e.g., "credit value: 40.31").
+- Do NOT add "units", "pts", "points", or any unit label. Do NOT invent a unit.
+- If the value is 0 or null, say "credit value: 0".
 `.trim();
 
   const baseline = isEs
@@ -173,7 +240,6 @@ Notes:
 - If you state a rate (%), try to include numerator/denominator (e.g., 18 of 803).
 `.trim();
 
-  // ✅ Terminología (suave)
   const terminology = isEs
     ? `
 Terminología preferida:
@@ -186,7 +252,24 @@ Preferred terminology:
 - If the user says "converted/conversion", gently clarify and answer using "confirmed/confirmation".
 `.trim();
 
-  // ✅ Ejemplo (muy importante para “naturalidad”)
+  const perfRules = isEs
+    ? `
+Modo PERFORMANCE (importante):
+- La tabla trae métricas por entidad (rep/oficina/pod/region/team).
+- Siempre menciona: TTD, confirmed, confirmationRate, dropped_rate y convertedValue si están presentes.
+- Si rowCount=1: analiza solo esa entidad.
+- Si hay varias filas: resume top 3 por TTD o convertedValue y 1–2 outliers (confirmationRate o dropped_rate).
+- No inventes métricas que no estén en los datos.
+`.trim()
+    : `
+PERFORMANCE mode (important):
+- The table contains metrics by entity (rep/office/pod/region/team).
+- Always mention: TTD, confirmed, confirmationRate, dropped_rate and convertedValue if present.
+- If rowCount=1: analyze only that entity.
+- If multiple rows: summarize top 3 by TTD or convertedValue and 1–2 outliers (confirmationRate or dropped_rate).
+- Do not invent metrics not present in the data.
+`.trim();
+
   const example = isEs
     ? `
 Ejemplo de salida (solo para guiar estilo):
@@ -203,21 +286,23 @@ Example output (style guide):
 - 🟢 Dropped down 0.8 pts; keep the same follow-up flow.
 `.trim();
 
-  // ✅ Bloque “interno” mínimo (para que no contamine el tono)
-  // Si quieres, puedes apagarlo por completo.
   const internalTiny = isEs
     ? `
 (Interno, no citar):
-- intent=${intent}; rowCount=${rowCount}
+- intent=${intent}; rowCount=${rowCount}; mode=${answerMode || 'default'}
 - sql_ref=${String(sql || '').slice(0, 220)}
 `.trim()
     : `
 (Internal, do not quote):
-- intent=${intent}; rowCount=${rowCount}
+- intent=${intent}; rowCount=${rowCount}; mode=${answerMode || 'default'}
 - sql_ref=${String(sql || '').slice(0, 220)}
 `.trim();
 
-  // ✅ EXPERT
+  const modeBlock =
+    answerMode === 'performance'
+      ? `\n${perfRules}\n${modeHint ? `\nPERF_HINT:\n${modeHint}\n` : ''}`
+      : '';
+
   if (expertAnalysis) {
     return `
 ${header}
@@ -232,14 +317,8 @@ ${firstLineRule}
 - Si mencionas una tasa (%), intenta incluir numerador/denominador (ej: 18 de 803).
 - Usa separador de miles con coma (1,234) y punto solo para decimales (12.3).
 - No uses símbolos de moneda.
+${creditValueRules}
 - Iconos sugeridos: 🔎 diagnóstico | 🎯 acción | 🔴 riesgo | 🟡 atención | 🟢 positivo | ℹ️ info | ❓ siguiente paso
-
-Contenido recomendado:
-- 1 bullet lectura ejecutiva (qué pasa).
-- 1 bullet diagnóstico (qué sugiere).
-- 2 bullets acciones concretas (hoy / esta semana).
-- 1 bullet riesgo/alerta (si aplica).
-- 1 bullet con pregunta inteligente de siguiente paso.
 
 ${terminology}
 
@@ -253,13 +332,14 @@ ${roleMap}
 
 ${note}
 
+${modeBlock}
+
 ${example}
 
 ${internalTiny}
 `.trim();
   }
 
-  // ✅ NORMAL (menos “robot”)
   return `
 ${header}
 
@@ -286,6 +366,8 @@ ${roleMap}
 
 ${note}
 
+${modeBlock}
+
 ${example}
 
 ${internalTiny}
@@ -294,24 +376,33 @@ ${internalTiny}
 
 /**
  * ✅ Post-proceso de terminología (menos agresivo)
- * - Ya NO reemplaza "conversión" en cualquier contexto
- * - Solo arregla frases KPI típicas
- * - Evita borrar "cnv" si está pegado a otra palabra
  */
 function postProcessTerminology(out, lang) {
   let s = String(out || '').trim();
 
   if (lang === 'es') {
     s = s
-      // casos típicos KPI
       .replace(/\btasa\s+de\s+conversi[oó]n\b/gi, 'tasa de confirmación')
       .replace(/\bconversion\s+value\b/gi, 'valor de crédito')
-      // "convertidos" cuando claramente se refiere a casos
       .replace(/\bcasos?\s+convertidos?\b/gi, 'casos confirmados')
       .replace(/\bconvertidos?\b/gi, 'confirmados');
 
-    // limpia tokens sueltos "(CNV)" o "CNV" cuando aparezcan aislados
-    s = s.replace(/(\(|\s)\s*cnv\s*(\)|\s)/gi, ' ').replace(/\s{2,}/g, ' ').trim();
+    // ✅ no "unidades" para valor de crédito
+    s = s
+      .replace(
+        /\b(valor\s+de\s+cr[eé]dito)\s+de\s+([0-9]+(?:\.[0-9]+)?)\s+unidades\b/gi,
+        '$1: $2'
+      )
+      .replace(
+        /\b(valor\s+de\s+cr[eé]dito)\s*:\s*([0-9]+(?:\.[0-9]+)?)\s+unidades\b/gi,
+        '$1: $2'
+      )
+      .replace(/\bunidades\b/gi, (m) => m); // deja otras "unidades" si fueran de otra cosa
+
+    s = s
+      .replace(/(\(|\s)\s*cnv\s*(\)|\s)/gi, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
     return s;
   }
 
@@ -321,13 +412,20 @@ function postProcessTerminology(out, lang) {
     .replace(/\bconverted\s+cases\b/gi, 'confirmed cases')
     .replace(/\bconverted\b/gi, 'confirmed');
 
-  s = s.replace(/(\(|\s)\s*cnv\s*(\)|\s)/gi, ' ').replace(/\s{2,}/g, ' ').trim();
+  // ✅ no "units" for credit value
+  s = s
+    .replace(/\bcredit\s+value\s+of\s+([0-9]+(?:\.[0-9]+)?)\s+units\b/gi, 'credit value: $1')
+    .replace(/\bcredit\s+value\s*:\s*([0-9]+(?:\.[0-9]+)?)\s+units\b/gi, 'credit value: $1');
+
+  s = s
+    .replace(/(\(|\s)\s*cnv\s*(\)|\s)/gi, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
   return s;
 }
 
 function formatThousandsInText(text = '') {
   return String(text || '').replace(/\b(\d{4,})\b/g, (m) => {
-    // no tocar años
     if (/^(19|20)\d{2}$/.test(m)) return m;
     return m.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   });
@@ -343,6 +441,9 @@ async function buildOwnerAnswer(question, sql, rows, meta = {}) {
 
   const intent = classifyIntent(question);
   const expertAnalysis = wantsExpertAnalysis(question);
+
+  const answerMode = detectAnswerMode(rows, meta);
+  const modeHint = answerMode === 'performance' ? buildPerformanceHintFromRows(rows) : null;
 
   const { summary, top, sample } = sanitizeRowsForSummary(question, rows);
   const rowCount = summary?.rowCount ?? 0;
@@ -370,12 +471,13 @@ async function buildOwnerAnswer(question, sql, rows, meta = {}) {
     assistantStyle: profile.style,
     assistantGreeting: profile.greeting,
     expertAnalysis,
+    answerMode,
+    modeHint,
   });
 
   const response = await openai.responses.create({
     model: 'gpt-4.1-mini',
-    // ✅ más tokens para que suene humano (menos telegráfico)
-    max_output_tokens: expertAnalysis ? 420 : 260,
+    max_output_tokens: expertAnalysis ? 420 : answerMode === 'performance' ? 320 : 260,
     input: [
       {
         role: 'system',
@@ -391,7 +493,6 @@ async function buildOwnerAnswer(question, sql, rows, meta = {}) {
   const raw = response.output?.[0]?.content?.[0]?.text || '';
   let cleaned = postProcessTerminology(raw, lang);
 
-  // ✅ si NO hay kpiWindow, eliminamos cualquier frase “sin filtro de tiempo”
   if (!meta?.kpiWindow || !String(meta.kpiWindow).trim()) {
     cleaned = cleaned
       .split('\n')

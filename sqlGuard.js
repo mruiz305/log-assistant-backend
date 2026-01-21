@@ -100,44 +100,11 @@ function validateAnalyticsSql(sql) {
       throw new Error('Consulta no permitida.');
     }
   }
+  // 8) LIMIT: No aplicamos LIMIT automático.
+  //    - Si el modelo incluye LIMIT explícito, se respeta.
+  //    - Si no incluye, devolvemos tal cual para no truncar totales/listados.
 
-  // 8) Reglas de LIMIT:
-  //    - agregadas: NO permitir LIMIT (tu regla original)
-  //    - no agregadas: si no trae LIMIT, forzamos LIMIT 500
-  //    - si trae LIMIT, no permitir > 500
-  const isAggregated =
-    /\bgroup\s+by\b/i.test(lowerWithoutStrings) ||
-    /\bcount\s*\(/i.test(lowerWithoutStrings) ||
-    /\bsum\s*\(/i.test(lowerWithoutStrings) ||
-    /\bavg\s*\(/i.test(lowerWithoutStrings) ||
-    /\bmin\s*\(/i.test(lowerWithoutStrings) ||
-    /\bmax\s*\(/i.test(lowerWithoutStrings);
-
-  const limitMatch = lowerWithoutStrings.match(/\blimit\s+(\d+)\b/i);
-
-  // agregadas: prohibir LIMIT
-  if (isAggregated && limitMatch) {
-    throw new Error('No se permite LIMIT en consultas agregadas.');
-  }
-
-  // no agregadas: aplicar/validar LIMIT
-  let safeSql = cleaned;
-
-  if (!isAggregated) {
-    if (!limitMatch) {
-      safeSql = `${cleaned} LIMIT 500`;
-    } else {
-      const n = parseInt(limitMatch[1], 10);
-      if (!Number.isFinite(n) || n <= 0) {
-        throw new Error('LIMIT inválido.');
-      }
-      if (n > 500) {
-        throw new Error('LIMIT máximo permitido: 500.');
-      }
-    }
-  }
-
-  return safeSql;
+  return cleaned;
 }
 
 module.exports = { validateAnalyticsSql };

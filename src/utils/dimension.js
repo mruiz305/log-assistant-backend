@@ -67,7 +67,7 @@ function extractDimensionFromMessage(message = '', uiLang = 'es') {
       const value = cleanDimensionValue(m[3]);
 
       if (value.length >= 2) {
-        return { column: p.column, value };
+        return { key: p.key, column: p.column, value };
       }
     }
   }

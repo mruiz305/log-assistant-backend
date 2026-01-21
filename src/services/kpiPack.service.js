@@ -6,8 +6,7 @@
      año específico (2025), mes+año (marzo 2025 / 03/2025), mes solo (marzo),
      últimos N días/meses, trimestre (Q1 2025), rango explícito (YYYY-MM-DD ... YYYY-MM-DD)
    - Soporta filtro persona: submitterName/intakeSpecialist/attorney (LIKE)
-   - IMPORTANTE: si NO detecta ventana de tiempo, NO asume 90 días.
-     (Opcional: puedes pasar opts.defaultWindowDays para tener fallback controlado.)
+   - ✅ FIX: si NO detecta ventana de tiempo, ASUME "este mes" (comportamiento esperado del producto)
    ============================================================ */
 
 function normalizeText(s = '') {
@@ -38,7 +37,7 @@ function makeLabel(kind, a, b, lang = 'es') {
     case 'year':
       return es ? `año ${a}` : `year ${a}`;
     case 'month_year':
-      return `${a} ${b}`; // a=nombre mes, b=año
+      return `${a} ${b}`;
     case 'month_only':
       return es ? `${a} (más reciente)` : `${a} (most recent)`;
     case 'range':
@@ -147,9 +146,7 @@ function monthLabel(num, lang = 'es') {
 function extractTimeWindow(question, lang = 'es', defaultWindowDays = null) {
   const q = normalizeText(question);
 
-  // Default: NO asumir nada (para evitar "90 días" silencioso)
-  let where = '';
-  let label = makeLabel('no_time', null, null, lang);
+  // Default (NO match)
   let matched = false;
 
   // Hoy
@@ -182,7 +179,7 @@ function extractTimeWindow(question, lang = 'es', defaultWindowDays = null) {
   }
 
   // Último mes (mes calendario anterior)
-  if (q.includes('ultimo mes') || q.includes('último mes') || q.includes('last month')) {
+  if (q.includes('ultimo mes') || q.includes('último mes') || q.includes('last month') || q.includes('mes pasado')) {
     return {
       matched: true,
       where: `WHERE dateCameIn >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01')
@@ -191,7 +188,7 @@ function extractTimeWindow(question, lang = 'es', defaultWindowDays = null) {
     };
   }
 
-  // Año pasado (año calendario anterior)
+  // Año pasado
   if (q.includes('ano pasado') || q.includes('año pasado') || q.includes('last year')) {
     return {
       matched: true,
@@ -239,7 +236,7 @@ function extractTimeWindow(question, lang = 'es', defaultWindowDays = null) {
     }
   }
 
-  // Rango explícito ISO: YYYY-MM-DD ... YYYY-MM-DD
+  // Rango ISO: YYYY-MM-DD ... YYYY-MM-DD
   const mRangeIso = q.match(
     /\b(19\d{2}|20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b.*\b(19\d{2}|20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/
   );
@@ -292,7 +289,7 @@ function extractTimeWindow(question, lang = 'es', defaultWindowDays = null) {
       yNum = parseInt(mQuarter[mQuarter.length - 1], 10);
     }
 
-    const startMonth = (qNum - 1) * 3 + 1; // 1,4,7,10
+    const startMonth = (qNum - 1) * 3 + 1;
     const start = `${yNum}-${String(startMonth).padStart(2, '0')}-01`;
 
     return {
@@ -330,7 +327,7 @@ function extractTimeWindow(question, lang = 'es', defaultWindowDays = null) {
     }
   }
 
-  // Mes solo: "marzo" -> el mes más reciente ya pasado (si aún no llega este año, usa año anterior)
+  // Mes solo
   const mMonthOnly = q.match(
     /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|sept|octubre|noviembre|diciembre|january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b/
   );
@@ -353,7 +350,7 @@ function extractTimeWindow(question, lang = 'es', defaultWindowDays = null) {
     }
   }
 
-  // Año específico: 2025
+  // Año específico
   const mYear = q.match(/\b(19\d{2}|20\d{2})\b/);
   if (mYear) {
     const y = parseInt(mYear[1], 10);
@@ -365,8 +362,8 @@ function extractTimeWindow(question, lang = 'es', defaultWindowDays = null) {
     };
   }
 
-  // Fallback controlado (SOLO si tú lo pides)
-  if (!matched && Number.isInteger(defaultWindowDays) && defaultWindowDays > 0) {
+  // Fallback controlado por días (si lo pides)
+  if (Number.isInteger(defaultWindowDays) && defaultWindowDays > 0) {
     return {
       matched: true,
       where: `WHERE dateCameIn >= DATE_SUB(CURDATE(), INTERVAL ${defaultWindowDays} DAY)`,
@@ -374,41 +371,63 @@ function extractTimeWindow(question, lang = 'es', defaultWindowDays = null) {
     };
   }
 
-  return { matched, where, label };
+  // No match
+  return { matched, where: '', label: makeLabel('no_time', null, null, lang) };
+}
+
+/** ✅ Default FIX: si no hay tiempo, aplica ESTE MES */
+function defaultThisMonthWindow(lang = 'es') {
+  return {
+    matched: true,
+    where: `WHERE dateCameIn >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+           AND dateCameIn < DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 1 MONTH)`,
+    label: makeLabel('this_month', 0, null, lang),
+  };
 }
 
 function buildKpiPackSql(message, opts = {}) {
   const lang = opts.lang === 'es' ? 'es' : 'en';
 
-  // ✅ NO asumir 90 días:
-  // buildKpiPackSql(msg, { lang:'es', person, defaultWindowDays: 90 })
-  const w = extractTimeWindow(message, lang, opts.defaultWindowDays ?? null);
+  // 1) Extraer ventana desde el mensaje
+  let w = extractTimeWindow(message, lang, opts.defaultWindowDays ?? null);
 
-  // quitar WHERE para poder concatenar más filtros
+  // 2) ✅ Si NO hubo match, forzar ESTE MES (comportamiento del producto)
+  if (!w?.matched) {
+    w = defaultThisMonthWindow(lang);
+  }
+
+  // quitar WHERE para poder concatenar filtros
   const timeClause = String(w.where || '').trim().toUpperCase().startsWith('WHERE ')
     ? String(w.where || '').trim().slice(6).trim()
     : String(w.where || '').trim();
 
-    const whereParts = [];
+  const whereParts = [];
   const params = [];
 
   if (timeClause) whereParts.push(timeClause);
- console.log('\n=== opts.person?.value ===\n', opts.person?.value);
-     
-  // filtro persona (submitterName/intakeSpecialist/attorney)
+
+  // ✅ Persona: SIEMPRE submitterName con LIKE (fallback submitter)
   if (opts.person?.value) {
     const val = String(opts.person.value || '').trim();
     if (val) {
-      if (!opts.person.column || opts.person.column === 'submitterName') {
+      const col = String(opts.person.column || 'submitterName');
+
+      if (!col || col === 'submitterName') {
         whereParts.push(
           "LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter))) LIKE CONCAT('%', LOWER(TRIM(?)), '%')"
         );
         params.push(val);
-      } else if (opts.person.column === 'intakeSpecialist') {
+      } else if (col === 'intakeSpecialist') {
         whereParts.push("LOWER(TRIM(intakeSpecialist)) LIKE CONCAT('%', LOWER(TRIM(?)), '%')");
         params.push(val);
-      } else if (opts.person.column === 'attorney') {
+      } else if (col === 'attorney') {
         whereParts.push("LOWER(TRIM(attorney)) LIKE CONCAT('%', LOWER(TRIM(?)), '%')");
+        params.push(val);
+      } else {
+        // por seguridad: si te llega otro column raro, cae a submitterName
+        whereParts.push(
+          "LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter))) LIKE CONCAT('%', LOWER(TRIM(?)), '%')"
+        );
         params.push(val);
       }
     }
@@ -429,8 +448,8 @@ SELECT
   SUM(CASE WHEN Confirmed=1 AND Status LIKE '%PROBLEM%' THEN 1 ELSE 0 END) AS leakage_confirmed_problem,
   SUM(CASE WHEN Confirmed=1 AND Status LIKE '%DROP%' THEN 1 ELSE 0 END) AS leakage_confirmed_dropped_status,
   SUM(CASE WHEN Confirmed=1 AND ClinicalStatus LIKE '%DROP%' THEN 1 ELSE 0 END) AS leakage_confirmed_clinical_dropped,
-    SUM(CASE WHEN Confirmed=0 and  Status LIKE '%ACTI%' THEN 1 ELSE 0 END) AS active_cases,
-  SUM(CASE WHEN Confirmed=0 and  Status LIKE '%REF%' THEN 1 ELSE 0 END) AS referout_cases
+  SUM(CASE WHEN Confirmed=0 AND Status LIKE '%ACTI%' THEN 1 ELSE 0 END) AS active_cases,
+  SUM(CASE WHEN Confirmed=0 AND Status LIKE '%REF%' THEN 1 ELSE 0 END) AS referout_cases
 FROM performance_data.dmLogReportDashboard
 ${whereClause};
 `.trim();
@@ -439,7 +458,7 @@ ${whereClause};
     sql,
     params,
     windowLabel: w.label,
-    timeMatched: !!w.matched,
+    timeMatched: true, // ✅ ya que si no match, caímos a este mes
   };
 }
 

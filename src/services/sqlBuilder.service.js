@@ -75,7 +75,7 @@ function extractTimeWindow(question, uiLang = 'en', opts = {}) {
   // =========================
   // ESTE MES (calendario)
   // =========================
-  if (q.includes('este mes') || q.includes('this month') || q.includes('current month')) {
+  if (q.includes('este mes') || q.includes('this month') || q.includes('current month') || q.includes('month to date') || q.includes('mes en curso')) {
     return {
       where: `WHERE dateCameIn >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
              AND dateCameIn < DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 1 MONTH)`,

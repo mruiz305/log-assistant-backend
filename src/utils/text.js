@@ -26,9 +26,9 @@ function hasExplicitPeriod(message = '', lang = 'es') {
   const periodWords = [
     'hoy', 'ayer', 'semana', 'semanal', 'ultimos 7', 'últimos 7', '7 dias', '7 días',
     'ultimos', 'últimos', 'dias', 'días', '90 dias', '90 días',
-    'mes', 'mensual', 'este mes', 'mes pasado', 'mes anterior',
+    'mes', 'mensual', 'este mes','mes en curso', 'mes pasado', 'mes anterior',
     'ano', 'año', 'anual', 'este año', 'este ano', 'ytd',
-    'year', 'this month', 'last month', 'this year', 'today', 'yesterday',
+    'year', 'this month', 'last month','month to date', 'this year', 'today', 'yesterday',
     'week', 'last 7', 'last seven', 'last 90', 'days', 'month', 'year',
     'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto',
     'septiembre', 'octubre', 'noviembre', 'diciembre',
