@@ -1,112 +1,81 @@
-/* =========================================================
-   DIMENSION FILTERS (Office/Team/Pod/etc)
-========================================================= */
+// src/utils/dimension.js
+// Centraliza inyección/strip de filtros LIKE para dimensiones (office/team/pod/region/director/attorney/intake/person)
+//
+// ✅ Objetivos
+// - Idempotente: si ya hay filtro para esa columna, lo reemplaza (no duplica)
+// - Token-friendly: "Maria, Chacon" => tokens AND (maria AND chacon)
+// - Compat: "__SUBMITTER__" para persona (submitterName con fallback submitter)
 
-/**
- * Extrae el "valor" después de "oficina de X", "team de X", etc.
- * Heurística simple pero funciona perfecto para:
- * - "cuantos casos tiene la oficina de Alix Romero"
- * - "cases for team of Miami East"
- */
-function cleanDimensionValue(raw = '') {
-  let v = String(raw || '').trim();
-
-  // Quitar puntuación final
-  v = v.replace(/[?.!,]+$/g, '').trim();
-
-  // Cortar frases típicas de periodo (en ES/EN)
-  // Importante: lo hacemos al final del string, para no romper nombres.
-  v = v.replace(
-    /\s+(en\s+este\s+mes|este\s+mes|this\s+month|en\s+el\s+mes|del\s+mes|of\s+this\s+month)\s*$/i,
-    ''
-  ).trim();
-
-  v = v.replace(
-    /\s+(esta\s+semana|en\s+esta\s+semana|this\s+week|en\s+la\s+semana|of\s+this\s+week)\s*$/i,
-    ''
-  ).trim();
-
-  v = v.replace(
-    /\s+(hoy|today|ayer|yesterday)\s*$/i,
-    ''
-  ).trim();
-
-  v = v.replace(
-    /\s+(ultimos|últimos|last)\s+\d+\s+(dias|días|days)\s*$/i,
-    ''
-  ).trim();
-
-  v = v.replace(
-    /\s+(este\s+ano|este\s+año|this\s+year|ytd)\s*$/i,
-    ''
-  ).trim();
-
-  // Quitar comillas si vienen
-  v = v.replace(/^['"]+|['"]+$/g, '').trim();
-
-  return v;
+function norm(s = '') {
+  return String(s ?? '').trim().replace(/\s+/g, ' ');
 }
 
-function extractDimensionFromMessage(message = '', uiLang = 'es') {
-  const raw = String(message || '').trim();
-
-  const patterns = [
-    { key: 'office',   rx: /\b(oficina|office)\s+(de|of)\s+(.+)$/i, column: 'OfficeName' },
-    { key: 'team',     rx: /\b(equipo|team)\s+(de|of)\s+(.+)$/i,   column: 'TeamName' },
-    { key: 'pod',      rx: /\b(pod)\s+(de|of)\s+(.+)$/i,          column: 'PODEName' }, // ajusta si es PODName
-    { key: 'region',   rx: /\b(region)\s+(de|of)\s+(.+)$/i,       column: 'RegionName' },
-    { key: 'director', rx: /\b(director)\s+(de|of)\s+(.+)$/i,     column: 'DirectorName' },
-    { key: 'attorney', rx: /\b(attorney|abogado)\s+(de|of)\s+(.+)$/i, column: 'attorney' },
-    { key: 'intake',   rx: /\b(intake|intake specialist|locked down)\s+(de|of)\s+(.+)$/i, column: 'intakeSpecialist' },
-    { key: 'submitter',rx: /\b(submitter|representante|agent|rep|entered by)\s+(de|of)\s+(.+)$/i, column: '__SUBMITTER__' },
-  ];
-
-  for (const p of patterns) {
-    const m = raw.match(p.rx);
-    if (m && m[3]) {
-      const value = cleanDimensionValue(m[3]);
-
-      if (value.length >= 2) {
-        return { key: p.key, column: p.column, value };
-      }
-    }
-  }
-
-  return null;
+function escapeSqlLiteral(v) {
+  return String(v ?? '').replace(/'/g, "''").trim();
 }
 
+function escapeRegExp(s) {
+  return String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
+const STOPWORDS = new Set([
+  'de','del','la','las','los','el','y','e','da','do','dos','das','van','von','the','of','and'
+]);
 
-/**
- * Inyecta un filtro LIKE en SQL (antes de GROUP BY/ORDER BY/LIMIT).
- * - Si hay WHERE -> agrega AND ...
- * - Si no hay WHERE -> crea WHERE ...
- *
- * OJO: Esto es “prudente” y funciona para el 95% de queries simples (tu caso).
- */
-function injectLikeFilter(sql, column, value) {
-  let s = String(sql || '').trim();
-  if (!s || !column || !value) return s;
+function tokenizeValue(v) {
+  const raw = norm(v)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-  // ✅ 1) quitar ; finales (uno o varios) para poder insertar AND sin romper SQL
-  s = s.replace(/;\s*$/g, '');
+  if (!raw) return [];
+  const tokens = raw
+    .split(' ')
+    .map(t => t.trim())
+    .filter(Boolean)
+    .filter(t => t.length >= 2)
+    .filter(t => !STOPWORDS.has(t));
 
-  const esc = String(value).replace(/'/g, "''").trim();
-  if (!esc) return s;
+  return (tokens.length ? tokens : raw.split(' ').filter(t => t.length >= 2)).slice(0, 3);
+}
 
-  // Submitter especial
-  let cond = '';
-  if (column === '__SUBMITTER__') {
-    cond = `LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter))) LIKE CONCAT('%', LOWER(TRIM('${esc}')), '%')`;
-  } else {
-    cond = `LOWER(TRIM(${column})) LIKE CONCAT('%', LOWER(TRIM('${esc}')), '%')`;
-  }
+function stripLikeFiltersForColumn(sql, column) {
+  if (!sql || !column) return sql;
+  const s0 = String(sql);
+  const col = escapeRegExp(column);
 
-  // ✅ si ya está aplicado, no duplicar
-  const lower = s.toLowerCase();
-  if (lower.includes(cond.toLowerCase())) return s;
+  const andRe = new RegExp(
+    String.raw`\s+AND\s+[^;]*?\b${col}\b[^;]*?\bLIKE\b[^;]*?(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)`,
+    'gis'
+  );
 
-  // ✅ insertar antes de GROUP BY / ORDER BY / LIMIT (si existen)
+  const whereRe = new RegExp(
+    String.raw`\bWHERE\b([^;]*?)\b${col}\b([^;]*?)\bLIKE\b([^;]*?)(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)`,
+    'gis'
+  );
+
+  let out = s0.replace(andRe, ' ');
+  out = out.replace(whereRe, () => 'WHERE ');
+  out = out.replace(/\bWHERE\s+AND\b/gi, 'WHERE ');
+  out = out.replace(/\bWHERE\s*(GROUP\s+BY|ORDER\s+BY|LIMIT)\b/gi, '$1');
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+function injectTokensLike(sql = '', column = '', value = '') {
+  const s0 = String(sql || '').trim();
+  const col = String(column || '').trim();
+  const v = norm(value);
+  if (!s0 || !col || !v) return s0;
+
+  const tokens = tokenizeValue(v);
+  if (!tokens.length) return s0;
+
+  const cond = tokens
+    .map((t) => `LOWER(TRIM(${col})) LIKE CONCAT('%', '${escapeSqlLiteral(t)}', '%')`)
+    .join(' AND ');
+
+  const s = s0.replace(/;\s*$/g, '');
   const cutRx = /\b(group\s+by|order\s+by|limit)\b/i;
   const m = s.match(cutRx);
   const cutAt = m ? m.index : -1;
@@ -114,13 +83,90 @@ function injectLikeFilter(sql, column, value) {
   const head = cutAt >= 0 ? s.slice(0, cutAt).trimEnd() : s;
   const tail = cutAt >= 0 ? s.slice(cutAt) : '';
 
-  if (/\bwhere\b/i.test(head)) {
-    s = `${head} AND ${cond}\n${tail}`.trim();
-  } else {
-    s = `${head}\nWHERE ${cond}\n${tail}`.trim();
-  }
-
-  // ✅ opcional: volver a poner ; si quieres (no es obligatorio)
-  return s;
+  if (/\bwhere\b/i.test(head)) return `${head} AND (${cond}) ${tail}`.trim();
+  return `${head} WHERE (${cond}) ${tail}`.trim();
 }
-module.exports = { extractDimensionFromMessage, injectLikeFilter };
+
+function injectTokensLikeSmart(sql, column, value) {
+  let out = stripLikeFiltersForColumn(sql, column);
+  const v = norm(value);
+  if (!v) return out;
+  out = injectTokensLike(out, column, v);
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+// =====================
+// Persona (submitterName / submitter)
+// =====================
+function stripSubmitterFilters(sql) {
+  if (!sql) return sql;
+  let out = String(sql);
+
+  out = out.replace(
+    /\s+AND\s+[^;]*?COALESCE\s*\(\s*NULLIF\s*\(\s*submitterName\s*,\s*''\s*\)\s*,\s*submitter\s*\)[^;]*?\bLIKE\b[^;]*?(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
+    ' '
+  );
+
+  out = out.replace(
+    /\s+AND\s+[^;]*?\bsubmitterName\b[^;]*?\bLIKE\b[^;]*?(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
+    ' '
+  );
+
+  out = out.replace(
+    /\s+AND\s+[^;]*?\bsubmitter\b[^;]*?\bLIKE\b[^;]*?(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
+    ' '
+  );
+
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+function injectSubmitterTokensLikeSmart(sql, personValue) {
+  const s0 = String(sql || '').trim();
+  const name = norm(personValue);
+  if (!s0 || !name) return s0;
+
+  const tokens = tokenizeValue(name);
+  if (!tokens.length) return s0;
+
+  const cond = tokens
+    .map((t) => `LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter))) LIKE CONCAT('%', '${escapeSqlLiteral(t)}', '%')`)
+    .join(' AND ');
+
+  const s = s0.replace(/;\s*$/g, '');
+  const cutRx = /\b(group\s+by|order\s+by|limit)\b/i;
+  const m = s.match(cutRx);
+  const cutAt = m ? m.index : -1;
+
+  const head = cutAt >= 0 ? s.slice(0, cutAt).trimEnd() : s;
+  const tail = cutAt >= 0 ? s.slice(cutAt) : '';
+
+  if (/\bwhere\b/i.test(head)) return `${head} AND (${cond}) ${tail}`.trim();
+  return `${head} WHERE (${cond}) ${tail}`.trim();
+}
+
+// ✅ compat con chat.route.js
+function injectLikeFilterSmart(sql, column, value) {
+  const col = String(column || '').trim();
+  if (col === '__SUBMITTER__') {
+    const cleaned = stripSubmitterFilters(sql);
+    return injectSubmitterTokensLikeSmart(cleaned, value);
+  }
+  return injectTokensLikeSmart(sql, col, value);
+}
+
+const stripPersonFilters = stripSubmitterFilters;
+
+module.exports = {
+  norm,
+  tokenizeValue,
+
+  stripLikeFiltersForColumn,
+  injectTokensLike,
+  injectTokensLikeSmart,
+
+  stripSubmitterFilters,
+  injectSubmitterTokensLikeSmart,
+
+  injectLikeFilterSmart,
+  stripPersonFilters,
+};

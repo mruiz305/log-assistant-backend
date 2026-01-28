@@ -2,6 +2,7 @@
 /* =====================================================================================
    Chat context locks (person + office/pod/team) + SQL preflight
 ===================================================================================== */
+const { listDimensions } = require('./dimensionRegistry');
 
 function norm(s = '') {
   return String(s || '').trim().replace(/\s+/g, ' ');
@@ -90,28 +91,26 @@ function cloneFilters(ctx = {}) {
   };
 }
 
-function applyLockedFiltersToSql(sql, injectLikeFilter, filters) {
+
+function applyLockedFiltersToSql(sql, injectLikeFilterSmart, filters) {
   let s = String(sql || '');
   if (!filters) return s;
 
-  const dims = [
-    ['office', 'OfficeName'],
-    ['team', 'TeamName'],
-    ['pod', 'PODEName'],
-    ['region', 'RegionName'],
-    ['director', 'DirectorName'],
-  ];
+  // todas las dims del registry menos person (person se maneja igual pero a veces con rules especiales)
+  const dims = listDimensions().filter((d) => d.key !== 'person');
 
-  for (const [k, col] of dims) {
-    const lock = filters[k];
-    if (lock && lock.locked && lock.value) {
-      s = injectLikeFilter(s, col, String(lock.value));
+  for (const d of dims) {
+    const lock = filters[d.key];
+    if (lock?.locked && lock?.value) {
+      s = injectLikeFilterSmart(s, d.column, String(lock.value));
     }
   }
 
-  // person handled elsewhere (submitterName) because you already have special rewrite logic
   return s;
 }
+
+module.exports = { applyLockedFiltersToSql };
+
 
 function buildSqlFixMessage(uiLang, originalQuestion, badSql, mysqlError) {
   const err = String(mysqlError || '').slice(0, 500);
