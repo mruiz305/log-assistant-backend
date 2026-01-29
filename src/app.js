@@ -8,7 +8,7 @@ const { makeRateLimiter } = require('./middlewares/rateLimit.middleware');
 const { errorMiddleware } = require('./middlewares/error.middleware');
 
 const chatRoute = require('./routes/chat.route');
-const authRoute = require('./routes/auth.routes'); 
+const authRoute = require('./routes/auth.routes');
 const dashboardRoute = require('./routes/dashboard.route');
 
 const app = express();
@@ -19,23 +19,26 @@ app.use(requestIdMiddleware);
 // 2) seguridad headers
 app.use(helmet());
 
-// 3) CORS whitelist
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      const allowed = (process.env.CORS_ORIGINS || '')
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
+// 3) CORS whitelist (DEBE ir antes de rutas)
+const corsOptions = {
+  origin: (origin, cb) => {
+    const allowed = (process.env.CORS_ORIGINS || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
 
-      if (!origin) return cb(null, true); // Postman / server-to-server
-      if (allowed.includes(origin)) return cb(null, true);
+    if (!origin) return cb(null, true); 
+    if (allowed.includes(origin)) return cb(null, true);
 
-      return cb(new Error('CORS blocked'), false);
-    },
-  })
-);
+    return cb(new Error('CORS blocked: ' + origin), false);
+  },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false, // pon true SOLO si usas cookies/sesión
+};
 
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); 
 // 4) body limit (solo una vez)
 app.use(express.json({ limit: '64kb' }));
 
