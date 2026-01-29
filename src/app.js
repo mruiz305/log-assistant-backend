@@ -38,7 +38,7 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); 
+app.options('/.*/', cors(corsOptions)); 
 // 4) body limit (solo una vez)
 app.use(express.json({ limit: '64kb' }));
 
