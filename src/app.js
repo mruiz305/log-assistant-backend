@@ -13,6 +13,9 @@ const dashboardRoute = require("./routes/dashboard.route");
 
 const app = express();
 
+// ✅ importante si estás detrás de Nginx/Proxy
+app.set("trust proxy", 1);
+
 // 1) request id (para logs/debug)
 app.use(requestIdMiddleware);
 
@@ -38,7 +41,8 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options(/.*/, cors(corsOptions));
+// ❌ app.options(/.*/, cors(corsOptions));
+app.options("*", cors(corsOptions)); // ✅
 
 // 4) body limit (solo una vez)
 app.use(express.json({ limit: "64kb" }));
