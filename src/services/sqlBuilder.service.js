@@ -389,6 +389,58 @@ DirectorName, RegionName, OfficeName, PODEName, TeamName, officeLabel.
 - NO inventes columnas.
 - Cuando filtres por nombres: usa LIKE con LOWER(TRIM()) (no igualdad exacta), salvo que el usuario pida exact match.
 
+==================== RULES (MANDATORY) ====================
+- Never use SELECT *.
+- If a field does not exist, omit it (do not invent columns).
+
+==================== DETAIL/LIST OUTPUT CONTRACT (MANDATORY) ====================
+Si el usuario pide lista/detalle ("logs", "list", "detalle", "casos", "cases"), genera una consulta NO agregada
+sin SELECT * y devuelve columnas explícitas (mínimo estas, en este orden preferido):
+
+idLead,
+dateCameIn,
+TRIM(COALESCE(NULLIF(submitterName,''), submitter)) AS submitter,
+name,
+Status,
+ClinicalStatus,
+LegalStatus,
+Confirmed,
+COALESCE(convertedValue,0) AS convertedValue,
+dateDropped,
+OfficeName,
+TeamName,
+RegionName
+
+- Puedes añadir columnas EXTRA solo si el usuario las pide explícitamente (por ejemplo attorney, intakeSpecialist, Visits, etc.).
+- No inventes columnas.
+
+==================== KPI OUTPUT CONTRACT (MANDATORY) ====================
+
+CUANDO el usuario pida: resumen/summary, KPIs, performance, salud/health, confirmed, dropped, problem,
+conversion value/crédito, tasas/rates, o ventanas como:
+"hoy", "esta semana", "últimos X días", "este mes", "último mes", "this month", "last month", "last X days",
+DEBES generar una consulta AGREGADA (sin SELECT *) que devuelva EXACTAMENTE estos alias:
+
+COUNT(*) AS gross_cases,
+SUM(CASE WHEN Confirmed=1 THEN 1 ELSE 0 END) AS confirmed_cases,
+ROUND(100 * SUM(CASE WHEN Confirmed=1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS confirmed_rate,
+ROUND(SUM(COALESCE(convertedValue,0)), 2) AS case_converted_value,
+SUM(CASE WHEN UPPER(Status) LIKE '%DROP%' THEN 1 ELSE 0 END) AS dropped_cases,
+ROUND(100 * SUM(CASE WHEN UPPER(Status) LIKE '%DROP%' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS dropped_rate,
+SUM(CASE WHEN UPPER(Status) LIKE '%PROBLEM%' THEN 1 ELSE 0 END) AS problem_cases,
+ROUND(100 * SUM(CASE WHEN UPPER(Status) LIKE '%PROBLEM%' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS problem_rate,
+SUM(CASE WHEN Confirmed=1 AND UPPER(Status) LIKE '%PROBLEM%' THEN 1 ELSE 0 END) AS leakage_confirmed_problem,
+SUM(CASE WHEN Confirmed=1 AND UPPER(Status) LIKE '%DROP%' THEN 1 ELSE 0 END) AS leakage_confirmed_dropped_status,
+SUM(CASE WHEN Confirmed=1 AND UPPER(ClinicalStatus) LIKE '%DROP%' THEN 1 ELSE 0 END) AS leakage_confirmed_clinical_dropped,
+SUM(CASE WHEN Confirmed=0 AND UPPER(Status) LIKE '%ACTI%' THEN 1 ELSE 0 END) AS active_cases,
+SUM(CASE WHEN Confirmed=0 AND UPPER(Status) LIKE '%REF%' THEN 1 ELSE 0 END) AS referout_cases
+
+REGLAS KPI:
+- No uses LIMIT.
+- No uses SELECT *.
+- Si se agrupa por dimensión (OfficeName/TeamName/RegionName/submitter), añade esa dimensión al SELECT y GROUP BY,
+  PERO conserva estos alias exactamente iguales (los KPIs deben mantenerse).
+
 Debes devolver JSON EXACTO:
 { 
   "sql": "...",
@@ -420,42 +472,38 @@ DirectorName, RegionName, OfficeName, PODEName, TeamName, officeLabel.
    TRIM(COALESCE(NULLIF(submitterName,''), submitter)) AS submitter
 
 2) CONFIRMED CASES:
-   - Confirmed = 1 => CONFIRMED case (operational term).
-   - "confirmation rate" = confirmed_cases / gross_cases.
-   - Confirmed is independent from Status and ClinicalStatus.
+- Confirmed = 1 => CONFIRMED case.
+- confirmation rate = confirmed_cases / gross_cases.
+- Confirmed is independent from Status and ClinicalStatus.
 
 3) CREDIT / VALUE:
-   - convertedValue is the CREDIT/VALUE amount (sum of conversion value).
-   - Do NOT confuse convertedValue with Confirmed.
+- convertedValue is the CREDIT/VALUE amount.
+- Do NOT confuse convertedValue with Confirmed.
 
-4) OPERATIONAL STATUSES (ALWAYS use Status, NOT leadStatus for dropped/problem):
-   - DROPPED overall => Status LIKE '%DROP%'
-   - DROPPED >60 => Status LIKE '%DROPPED%' AND Status LIKE '%60%'
-   - PROBLEM => Status LIKE '%PROBLEM%'
-   - PROBLEM >30 => Status LIKE '%PROBLEM%' AND Status LIKE '%30%'
-
-   Note: a case may have Confirmed=1 and still show PROBLEM/REF OUT/DROPPED in Status/ClinicalStatus.
-         Status does NOT invalidate confirmed or credit.
+4) OPERATIONAL STATUSES (ALWAYS use Status, NOT leadStatus):
+- DROPPED overall => Status LIKE '%DROP%'
+- DROPPED >60 => Status LIKE '%DROPPED%' AND Status LIKE '%60%'
+- PROBLEM => Status LIKE '%PROBLEM%'
+- PROBLEM >30 => Status LIKE '%PROBLEM%' AND Status LIKE '%30%'
 
 5) CLINICAL DROPPED (only if explicitly requested):
-   - Clinical dropped => ClinicalStatus LIKE '%DROP%'
+- Clinical dropped => ClinicalStatus LIKE '%DROP%'
 
 6) VISITS:
-   - Visits can be NULL. Do not assume 0.
-   - Use COALESCE(Visits,0) only when needed for numeric comparisons.
+- Visits can be NULL. Do not assume 0.
+- Use COALESCE(Visits,0) only when needed for numeric comparisons.
 
 7) DATES:
-   - dateCameIn is the primary date for trends/grouping unless another date is requested.
-   - If user asks for dropped date => use dateDropped.
+- dateCameIn is the primary date unless another date is requested.
+- Dropped date => use dateDropped.
 
-==================== INTENT MAP (MANDATORY) ====================
-- If user asks "confirmed/confirmados" => use Confirmed.
-- If user asks "credit/conversion value" => use SUM(convertedValue).
-- If user asks Dropped/Problem/... => use Status (LIKE).
-- "confirmed with problems" =>
-    WHERE Confirmed=1 AND (Status LIKE '%PROBLEM%' OR Status LIKE '%DROP%')
-- "confirmed clinical dropped" =>
-    WHERE Confirmed=1 AND ClinicalStatus LIKE '%DROP%'
+8) PERSON FILTER (MANDATORY):
+- If the user asks "cases from <person>" and no role is specified:
+  filter submitterName/submitter:
+  WHERE LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter))) LIKE CONCAT('%', LOWER(TRIM('X')), '%')
+- Use intakeSpecialist only if explicitly requested (intake/locked down).
+- Use attorney only if explicitly requested (attorney/lawyer).
+- Use OfficeName/TeamName/RegionName/etc only if explicitly requested.
 
 ==================== TECH RULES ====================
 - Output ONLY one SELECT against dmLogReportDashboard.
@@ -464,6 +512,58 @@ DirectorName, RegionName, OfficeName, PODEName, TeamName, officeLabel.
 - Do NOT use LIMIT.
 - Do NOT invent columns.
 
+==================== RULES (MANDATORY) ====================
+- Never use SELECT *.
+- If a field does not exist, omit it (do not invent columns).
+
+==================== DETAIL/LIST OUTPUT CONTRACT (MANDATORY) ====================
+If the user asks for logs/list/details/cases, generate a NON-aggregated query (no SELECT *) and return explicit columns
+(minimum these, preferred order):
+
+idLead,
+dateCameIn,
+TRIM(COALESCE(NULLIF(submitterName,''), submitter)) AS submitter,
+name,
+Status,
+ClinicalStatus,
+LegalStatus,
+Confirmed,
+COALESCE(convertedValue,0) AS convertedValue,
+dateDropped,
+OfficeName,
+TeamName,
+RegionName
+
+- Add extra columns ONLY if the user explicitly requests them.
+- Do not invent columns.
+
+==================== KPI OUTPUT CONTRACT (MANDATORY) ====================
+
+WHEN the user asks for: summary, KPIs, performance, health, confirmed, dropped, problem,
+conversion value/credit, rates, or time windows like:
+"today", "this week", "last X days", "this month", "last month",
+you MUST generate an AGGREGATED query (no SELECT *) returning EXACTLY these aliases:
+
+COUNT(*) AS gross_cases,
+SUM(CASE WHEN Confirmed=1 THEN 1 ELSE 0 END) AS confirmed_cases,
+ROUND(100 * SUM(CASE WHEN Confirmed=1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS confirmed_rate,
+ROUND(SUM(COALESCE(convertedValue,0)), 2) AS case_converted_value,
+SUM(CASE WHEN UPPER(Status) LIKE '%DROP%' THEN 1 ELSE 0 END) AS dropped_cases,
+ROUND(100 * SUM(CASE WHEN UPPER(Status) LIKE '%DROP%' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS dropped_rate,
+SUM(CASE WHEN UPPER(Status) LIKE '%PROBLEM%' THEN 1 ELSE 0 END) AS problem_cases,
+ROUND(100 * SUM(CASE WHEN UPPER(Status) LIKE '%PROBLEM%' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS problem_rate,
+SUM(CASE WHEN Confirmed=1 AND UPPER(Status) LIKE '%PROBLEM%' THEN 1 ELSE 0 END) AS leakage_confirmed_problem,
+SUM(CASE WHEN Confirmed=1 AND UPPER(Status) LIKE '%DROP%' THEN 1 ELSE 0 END) AS leakage_confirmed_dropped_status,
+SUM(CASE WHEN Confirmed=1 AND UPPER(ClinicalStatus) LIKE '%DROP%' THEN 1 ELSE 0 END) AS leakage_confirmed_clinical_dropped,
+SUM(CASE WHEN Confirmed=0 AND UPPER(Status) LIKE '%ACTI%' THEN 1 ELSE 0 END) AS active_cases,
+SUM(CASE WHEN Confirmed=0 AND UPPER(Status) LIKE '%REF%' THEN 1 ELSE 0 END) AS referout_cases
+
+KPI RULES:
+- No LIMIT.
+- Never SELECT *.
+- If grouping by a dimension (OfficeName/TeamName/RegionName/submitter), include it in SELECT and GROUP BY,
+  but keep the KPI aliases exactly the same.
+
 Must return EXACT JSON:
 {
   "sql": "...",
@@ -471,6 +571,7 @@ Must return EXACT JSON:
 }
 `.trim();
 }
+
 
 function buildUserPrompt(question, intent, uiLang = 'en') {
   if (uiLang === 'es') {
