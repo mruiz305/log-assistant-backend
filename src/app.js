@@ -30,7 +30,7 @@ const corsOptions = {
       .map((s) => s.trim())
       .filter(Boolean);
 
-    if (!origin) return cb(null, true);
+    if (!origin) return cb(null, true); // Postman / server-to-server
     if (allowed.includes(origin)) return cb(null, true);
 
     return cb(new Error("CORS blocked: " + origin), false);
@@ -40,9 +40,16 @@ const corsOptions = {
   credentials: false,
 };
 
-app.use(cors(corsOptions));
-app.options("/*", cors(corsOptions));
+// ✅ Preflight (OPTIONS) sin usar app.options() wildcard (evita PathError)
+app.use((req, res, next) => {
+  if (req.method === "OPTIONS") {
+    return cors(corsOptions)(req, res, next);
+  }
+  return next();
+});
 
+// CORS normal para el resto
+app.use(cors(corsOptions));
 
 // 4) body limit (solo una vez)
 app.use(express.json({ limit: "64kb" }));
