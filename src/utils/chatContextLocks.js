@@ -2,7 +2,7 @@
 /* =====================================================================================
    Chat context locks (person + office/pod/team) + SQL preflight
 ===================================================================================== */
-const { listDimensions } = require('./dimensionRegistry');
+const { listDimensions } = require('../domain/dimensions/dimensionRegistry');
 
 function norm(s = '') {
   return String(s || '').trim().replace(/\s+/g, ' ');

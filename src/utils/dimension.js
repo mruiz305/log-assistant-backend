@@ -102,23 +102,30 @@ function stripSubmitterFilters(sql) {
   if (!sql) return sql;
   let out = String(sql);
 
-  out = out.replace(
+  const patterns = [
+    // AND ...
     /\s+AND\s+[^;]*?COALESCE\s*\(\s*NULLIF\s*\(\s*submitterName\s*,\s*''\s*\)\s*,\s*submitter\s*\)[^;]*?\bLIKE\b[^;]*?(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
-    ' '
-  );
-
-  out = out.replace(
     /\s+AND\s+[^;]*?\bsubmitterName\b[^;]*?\bLIKE\b[^;]*?(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
-    ' '
-  );
-
-  out = out.replace(
     /\s+AND\s+[^;]*?\bsubmitter\b[^;]*?\bLIKE\b[^;]*?(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
-    ' '
-  );
 
-  return out.replace(/\s+/g, ' ').trim();
+    // WHERE <cond> (primera condición)
+    /\bWHERE\b\s+[^;]*?COALESCE\s*\(\s*NULLIF\s*\(\s*submitterName\s*,\s*''\s*\)\s*,\s*submitter\s*\)[^;]*?\bLIKE\b[^;]*?(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
+    /\bWHERE\b\s+[^;]*?\bsubmitterName\b[^;]*?\bLIKE\b[^;]*?(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
+    /\bWHERE\b\s+[^;]*?\bsubmitter\b[^;]*?\bLIKE\b[^;]*?(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
+  ];
+
+  for (const rx of patterns) out = out.replace(rx, (m) => (m.startsWith("WHERE") ? "WHERE " : " "));
+
+  out = out
+    .replace(/\bWHERE\s+AND\b/gi, "WHERE ")
+    .replace(/\bWHERE\s*(GROUP\s+BY|ORDER\s+BY|LIMIT)\b/gi, "$1")
+    .replace(/\bWHERE\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return out;
 }
+
 
 function injectSubmitterTokensLikeSmart(sql, personValue) {
   const s0 = String(sql || '').trim();

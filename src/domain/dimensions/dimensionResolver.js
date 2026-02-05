@@ -1,5 +1,5 @@
 // src/utils/dimensionResolver.js
-const { DIMENSIONS } = require('./dimensionRegistry');
+const { DIMENSIONS } = require('../domain/dimensions/dimensionRegistry');
 
 // Detecta si el mensaje tiene forma "oficina de X" (no "oficina Miami")
 function isOfficeOfPersonPhrase(message = '', lang = 'es') {

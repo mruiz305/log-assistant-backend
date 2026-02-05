@@ -1,15 +1,17 @@
 // src/utils/miniChart.js
 // MiniChart debe aparecer SOLO cuando aporta valor visual.
+// ✅ Enforcing by preset:
+// - dropped_last_3_months => line (tendencia mensual)
+// - summary/last_7_days/this_month/confirmed_month => donut (distribución)
+// - top_reps => bar (ranking)
 
-function wantsMiniChart(question = "", lang = "en") {
-  const q = String(question || "").toLowerCase();
-
-  const es =
-    /(tendencia|graf(ic|i)c|chart|compar(a|e)|versus|vs|top\s+\d+|ranking|por\s+(oficina|team|equipo|pod|region|director|abogado|intake|representante|submitter))/i;
-  const en =
-    /(trend|chart|graph|compare|versus|vs|top\s+\d+|ranking|by\s+(office|team|pod|region|director|attorney|intake|rep|submitter))/i;
-
-  return lang === "es" ? es.test(q) : en.test(q);
+function safeNum(x, def = 0) {
+  if (x === null || x === undefined) return def;
+  if (typeof x === "number") return Number.isFinite(x) ? x : def;
+  const s = String(x).trim();
+  if (!s) return def;
+  const n = Number(s.replace(/%/g, "").replace(/,/g, ""));
+  return Number.isFinite(n) ? n : def;
 }
 
 function inferTopN(question = "") {
@@ -21,183 +23,198 @@ function inferTopN(question = "") {
   return 10;
 }
 
-function toNumber(x) {
-  if (x === null || x === undefined) return 0;
-  if (typeof x === "number") return Number.isFinite(x) ? x : 0;
-  const s = String(x).trim();
-  if (!s) return 0;
-  // soporta "12.34", "12,34", "12%" etc.
-  const cleaned = s.replace(/%/g, "").replace(/,/g, "");
-  const n = Number(cleaned);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function pickLabelKey(keys = []) {
-  return (
-    keys.find((k) =>
-      /office|officename|team|teamname|pod|podename|region|regionname|director|directorname|attorney|submitter|submittername|name/i.test(
-        k
-      )
-    ) ||
-    keys.find((k) => /month|date|day|week/i.test(k)) ||
-    null
-  );
-}
-
-function pickValueKey(keys = [], question = "") {
+/** ✅ Decide kind 100% por preset (y fallback por texto) */
+function inferKindFromPreset(presetKey = "", question = "") {
+  const p = String(presetKey || "").toLowerCase();
   const q = String(question || "").toLowerCase();
 
-  // Prioridad según la pregunta
-  const wantsConfirmed = /(confirm|confirmed|confirmados|confirmacion|confirmación)/i.test(q);
-  const wantsDropped = /(drop|dropped|problem|leakage|referout|ref\s*out)/i.test(q);
-  const wantsValue = /(valor\s+de\s+conversi[oó]n|conversion\s+value|converted\s+value)/i.test(q);
-
-  const candidates = [
-    // rates
-    "confirmed_rate",
-    "confirmationRate",
-    "confirmationrate",
-    "dropped_rate",
-    // counts
-    "confirmed",
-    "confirmed_cases",
-    "dropped_cases",
-    "dropped",
-    "problem_cases",
-    "problem",
-    "ttd",
-    // money-like (sin moneda)
-    "convertedValue",
-    "convertedvalue",
-    "converted_value",
-    "case_converted_value",
-  ];
-
-  // Si pide "valor de conversión", intentamos eso primero
-  if (wantsValue) {
-    const k = keys.find((x) => /convertedvalue|converted_value|case_converted_value/i.test(x));
-    if (k) return k;
+  if (p.includes("dropped_last_3_months") || p.includes("dropped_3m") || /dropped.*3\s*months/.test(q)) {
+    return "line";
   }
 
-  // Si pide dropped/leakage, prioriza dropped_rate o dropped_cases
-  if (wantsDropped) {
-    const k =
-      keys.find((x) => /dropped_rate/i.test(x)) ||
-      keys.find((x) => /dropped_cases|dropped\b/i.test(x)) ||
-      null;
-    if (k) return k;
+  if (
+    p.includes("summary_week") ||
+    p.includes("summary") ||
+    p.includes("last_7_days") ||
+    p.includes("this_month") ||
+    p.includes("confirmed_month") ||
+    /last 7 days|this month|summary|mes en curso|últimos 7 días|semana/i.test(q)
+  ) {
+    return "donut";
   }
 
-  // Si pide confirmación, prioriza confirmed_rate/confirmationRate/confirmed_cases
-  if (wantsConfirmed) {
-    const k =
-      keys.find((x) => /confirmed_rate|confirmationrate/i.test(x)) ||
-      keys.find((x) => /confirmed_cases|confirmed\b/i.test(x)) ||
-      null;
-    if (k) return k;
+  if (p.includes("top_reps") || /top reps|top\s+\d+|ranking/.test(q)) {
+    return "bar";
   }
 
-  // Fallback por lista de candidatos
-  for (const c of candidates) {
-    const found = keys.find((k) => String(k).toLowerCase() === String(c).toLowerCase());
-    if (found) return found;
-  }
-
-  // Último fallback: primer numérico razonable
-  return keys.find((k) => /rate|count|total|sum|avg|min|max|value/i.test(k)) || null;
+  return null;
 }
 
-function buildFromBreakdownRows(question, lang, rows, presetKey) {
+// ✅ helper: leer keys alternativos del kpiPack
+function pickKpi(kpiPack, keys = []) {
+  for (const k of keys) {
+    if (kpiPack && Object.prototype.hasOwnProperty.call(kpiPack, k)) return safeNum(kpiPack[k], 0);
+  }
+  return 0;
+}
+
+/**
+ * ✅ DONUT SIEMPRE desde KPI PACK (misma fuente que tus cards)
+ * Si el kpiPack trae distribución (confirmed/dropped/problem/active/referout), la usa.
+ * Si NO la trae, hace fallback a confirmed/dropped/other usando gross.
+ */
+function buildDonutFromKpiPack(lang, kpiPack, presetKey) {
+  if (!kpiPack || typeof kpiPack !== "object") return null;
+
+  const confirmed = pickKpi(kpiPack, ["confirmed_cases", "confirmed", "Confirmed"]);
+  const dropped = pickKpi(kpiPack, ["dropped_cases", "dropped", "Dropped"]);
+  const problem = pickKpi(kpiPack, ["problem_cases", "problem", "Problem"]);
+  const active = pickKpi(kpiPack, ["active_cases", "active", "Active"]);
+  const referout = pickKpi(kpiPack, ["referout_cases", "referout", "Referout", "referred_out", "referredOut"]);
+
+  const hasDistribution = (confirmed + dropped + problem + active + referout) > 0;
+
+  let labels = [];
+  let values = [];
+  let colors = [];
+
+  if (hasDistribution) {
+    const points = [
+      { label: lang === "es" ? "Confirmed" : "Confirmed", value: confirmed, color: "#22c55e" },
+      { label: "Dropped", value: dropped, color: "#eab308" },
+      { label: "Problem", value: problem, color: "#ef4444" },
+      { label: lang === "es" ? "Active" : "Active", value: active, color: "#3b82f6" },
+      { label: "Referout", value: referout, color: "#94a3b8" },
+    ].filter((p) => p.value > 0);
+
+    if (points.length < 2) return null;
+
+    labels = points.map((p) => p.label);
+    values = points.map((p) => p.value);
+    colors = points.map((p) => p.color);
+  } else {
+    // fallback mínimo si tu kpiPack no trae active/referout/etc.
+    const gross = pickKpi(kpiPack, ["gross_cases", "ttd", "total", "Total"]);
+    const other = Math.max(0, gross - confirmed - dropped);
+
+    const points = [
+      { label: lang === "es" ? "Confirmed" : "Confirmed", value: confirmed, color: "#22c55e" },
+      { label: "Dropped", value: dropped, color: "#eab308" },
+      { label: lang === "es" ? "Other" : "Other", value: other, color: "#94a3b8" },
+    ].filter((p) => p.value > 0);
+
+    if (points.length < 2) return null;
+
+    labels = points.map((p) => p.label);
+    values = points.map((p) => p.value);
+    colors = points.map((p) => p.color);
+  }
+
+  const total = values.reduce((a, b) => a + b, 0);
+
+  return {
+    kind: "donut",
+    title: lang === "es" ? "Distribución de casos" : "Case distribution",
+    labels,
+    values,
+    colors,
+    center: { label: lang === "es" ? "Total" : "Total", value: total },
+    meta: { presetKey: presetKey || null, source: "kpi_pack" },
+  };
+}
+
+/**
+ * ✅ LINE: Dropped last 3 months (tendencia por mes)
+ * Espera rows con algo como: month + dropped_rate OR dropped_cases
+ */
+function buildDroppedTrendLine(lang, rows, presetKey) {
   const arr = Array.isArray(rows) ? rows : [];
   if (arr.length < 2) return null;
 
-  const first = arr[0] || null;
-  const keys = first ? Object.keys(first) : [];
+  const keys = Object.keys(arr[0] || {});
   if (!keys.length) return null;
 
-  const labelKey = pickLabelKey(keys);
-  const valueKey = pickValueKey(keys, question);
-  if (!labelKey || !valueKey) return null;
+  const monthKey =
+    keys.find((k) => /month|mes|period/i.test(k)) ||
+    keys.find((k) => /date|yyyy/i.test(k)) ||
+    null;
+
+  const valueKey =
+    keys.find((k) => /dropped_rate|droppedrate/i.test(k)) ||
+    keys.find((k) => /dropped_cases|dropped\b/i.test(k)) ||
+    null;
+
+  if (!monthKey || !valueKey) return null;
 
   const points = arr
     .slice(0, 12)
     .map((r) => ({
-      label: String(r[labelKey] ?? "").trim(),
-      value: toNumber(r[valueKey]),
+      label: String(r[monthKey] ?? "").trim(),
+      value: safeNum(r[valueKey], 0),
     }))
     .filter((p) => p.label);
 
-  // Debe haber mínimo 2 puntos con algo de variación
   if (points.length < 2) return null;
 
-  const nonZero = points.filter((p) => p.value !== 0);
-  if (nonZero.length < 1) return null;
-
   return {
-    type: "mini_bar",
-    title: lang === "es" ? "Resumen visual" : "Visual summary",
-    labelKey,
-    valueKey,
-    points,
-    meta: { presetKey: presetKey || null, source: "breakdown_rows" },
+    kind: "line",
+    title: lang === "es" ? "Dropped últimos 3 meses" : "Dropped last 3 months",
+    labels: points.map((p) => p.label),
+    values: points.map((p) => p.value),
+    meta: { presetKey: presetKey || null, source: "rows_monthly", monthKey, valueKey },
   };
 }
 
-function buildFromListMode(question, lang, rows, presetKey) {
-  // List mode: contamos por una dimensión (Status/Office/Team/Submitter/etc.)
+/**
+ * ✅ BAR: Top reps (ranking)
+ * Si rows ya trae columnas de ranking (submitterName + confirmed/ttd/etc) usa eso.
+ * Si no, hace fallback contando ocurrencias por submitterName/submitter.
+ */
+function buildTopRepsBar(question, lang, rows, presetKey) {
   const arr = Array.isArray(rows) ? rows : [];
   if (arr.length < 2) return null;
 
-  const q = String(question || "").toLowerCase();
   const n = inferTopN(question);
+  const keys = Object.keys(arr[0] || {});
 
-  // Elegimos dimensión según la pregunta
-  const dimPriority = [
-    { rx: /(por\s+oficina|by\s+office)/i, keys: ["OfficeName", "officeName", "office", "Office"] },
-    { rx: /(por\s+team|por\s+equipo|by\s+team)/i, keys: ["TeamName", "teamName", "team", "Team"] },
-    { rx: /(por\s+pod|by\s+pod)/i, keys: ["PODEName", "podName", "pod", "POD"] },
-    { rx: /(por\s+region|by\s+region)/i, keys: ["RegionName", "regionName", "region", "Region"] },
-    { rx: /(por\s+director|by\s+director)/i, keys: ["DirectorName", "directorName", "director", "Director"] },
-    { rx: /(por\s+abogado|by\s+attorney)/i, keys: ["attorney", "Attorney"] },
-    { rx: /(por\s+intake|locked\s+down|by\s+intake)/i, keys: ["intakeSpecialist", "IntakeSpecialist"] },
-    { rx: /(por\s+rep|representante|submitter|entered\s+by|by\s+rep)/i, keys: ["submitterName", "submitter", "name"] },
-    // fallback útil si pregunta "status"
-    { rx: /(status|dropped|problem|leakage|ref\s*out)/i, keys: ["Status", "status", "leadStatus", "ClinicalStatus", "LegalStatus"] },
-  ];
+  const labelKey =
+    keys.find((k) => /submittername/i.test(k)) ||
+    keys.find((k) => /^submitter$/i.test(k)) ||
+    keys.find((k) => /rep|name/i.test(k)) ||
+    null;
 
-  // fallback general: Status si existe, si no submitterName/OfficeName
-  const defaultDims = ["Status", "OfficeName", "TeamName", "submitterName", "submitter", "name"];
+  const valueKey =
+    keys.find((k) => /confirmed\b|confirmed_cases/i.test(k)) ||
+    keys.find((k) => /ttd|total|count/i.test(k)) ||
+    keys.find((k) => /convertedvalue|converted_value/i.test(k)) ||
+    null;
 
-  let dimKey = null;
+  // Caso A: viene valueKey (ranking real)
+  if (labelKey && valueKey) {
+    const points = arr
+      .map((r) => ({ label: String(r[labelKey] ?? "").trim(), value: safeNum(r[valueKey], 0) }))
+      .filter((p) => p.label)
+      .sort((a, b) => b.value - a.value)
+      .slice(0, n);
 
-  for (const d of dimPriority) {
-    if (!d.rx.test(q)) continue;
-    for (const k of d.keys) {
-      if (k in (arr[0] || {})) {
-        dimKey = k;
-        break;
-      }
-    }
-    if (dimKey) break;
+    if (points.length < 2) return null;
+
+    return {
+      kind: "bar",
+      title: lang === "es" ? "Top reps" : "Top reps",
+      labels: points.map((p) => p.label),
+      values: points.map((p) => p.value),
+      meta: { presetKey: presetKey || null, source: "rows_rank", labelKey, valueKey },
+    };
   }
 
-  if (!dimKey) {
-    for (const k of defaultDims) {
-      if (k in (arr[0] || {})) {
-        dimKey = k;
-        break;
-      }
-    }
-  }
+  // Caso B: fallback por conteo
+  if (!labelKey) return null;
 
-  if (!dimKey) return null;
-
-  // Conteo
   const map = new Map();
   for (const r of arr) {
-    const label = String(r[dimKey] ?? "").trim();
+    const label = String(r[labelKey] ?? "").trim();
     if (!label) continue;
-
     map.set(label, (map.get(label) || 0) + 1);
   }
 
@@ -209,76 +226,32 @@ function buildFromListMode(question, lang, rows, presetKey) {
   if (points.length < 2) return null;
 
   return {
-    type: "mini_bar",
-    title: lang === "es" ? "Top (conteo)" : "Top (count)",
-    labelKey: dimKey,
-    valueKey: "count",
-    points,
-    meta: { presetKey: presetKey || null, source: "list_mode_count" },
-  };
-}
-
-function buildFromKpiPack(question, lang, kpiPack, presetKey) {
-  if (!kpiPack || typeof kpiPack !== "object") return null;
-
-  // Si el usuario pidió chart, podemos mostrar 2–4 barras KPI.
-  // OJO: solo si tenemos al menos 2 métricas válidas.
-  const candidates = [
-    { key: "gross_cases", label: lang === "es" ? "Casos" : "Cases" },
-    { key: "ttd", label: lang === "es" ? "Casos" : "Cases" },
-    { key: "confirmed_cases", label: lang === "es" ? "Confirmados" : "Confirmed" },
-    { key: "confirmed_rate", label: lang === "es" ? "Tasa confirmación" : "Confirmation rate" },
-    { key: "dropped_cases", label: lang === "es" ? "Dropped" : "Dropped" },
-    { key: "dropped_rate", label: lang === "es" ? "Tasa dropped" : "Dropped rate" },
-    { key: "problem_rate", label: lang === "es" ? "Tasa problem" : "Problem rate" },
-    { key: "case_converted_value", label: lang === "es" ? "Valor conversión" : "Conversion value" },
-  ];
-
-  const points = [];
-  for (const c of candidates) {
-    if (!(c.key in kpiPack)) continue;
-    const v = toNumber(kpiPack[c.key]);
-    // permitir 0 solo si ya hay algo más
-    if (v === 0 && points.length === 0) continue;
-    points.push({ label: c.label, value: v });
-    if (points.length >= 4) break;
-  }
-
-  if (points.length < 2) return null;
-
-  return {
-    type: "mini_bar",
-    title: lang === "es" ? "KPIs" : "KPIs",
-    labelKey: "kpi",
-    valueKey: "value",
-    points,
-    meta: { presetKey: presetKey || null, source: "kpi_pack" },
+    kind: "bar",
+    title: lang === "es" ? "Top reps" : "Top reps",
+    labels: points.map((p) => p.label),
+    values: points.map((p) => p.value),
+    meta: { presetKey: presetKey || null, source: "rows_count", labelKey },
   };
 }
 
 function buildMiniChart(question, lang, { kpiPack, rows, presetKey } = {}) {
-  const arr = Array.isArray(rows) ? rows : [];
-  const rowCount = arr.length;
+  const kind = inferKindFromPreset(presetKey, question);
 
-  const userAsked = wantsMiniChart(question, lang);
-
-  // 1) Si hay breakdown (>=2 filas con columnas de label/value), úsalo.
-  const fromBreakdown = buildFromBreakdownRows(question, lang, arr, presetKey);
-  if (fromBreakdown) return fromBreakdown;
-
-  // 2) Si es list mode, solo construimos chart si el usuario lo pidió (top/ranking/por x/chart)
-  if (rowCount >= 2 && userAsked) {
-    const fromList = buildFromListMode(question, lang, arr, presetKey);
-    if (fromList) return fromList;
+  // ✅ 1) DONUT: summary/this_month/last_7_days/confirmed_month (siempre desde KPI PACK)
+  if (kind === "donut") {
+    return buildDonutFromKpiPack(lang, kpiPack, presetKey);
   }
 
-  // 3) Si no hay breakdown pero usuario pidió chart, intenta con KPI pack
-  if (userAsked) {
-    const fromKpi = buildFromKpiPack(question, lang, kpiPack, presetKey);
-    if (fromKpi) return fromKpi;
+  // ✅ 2) LINE: dropped_last_3_months (siempre desde rows mensual)
+  if (kind === "line") {
+    return buildDroppedTrendLine(lang, rows, presetKey);
   }
 
-  // 4) Si no aporta valor, nada
+  // ✅ 3) BAR: top_reps (siempre desde rows)
+  if (kind === "bar") {
+    return buildTopRepsBar(question, lang, rows, presetKey);
+  }
+
   return null;
 }
 
