@@ -1,5 +1,5 @@
-// src/utils/dimensionExtractor.js
-const { DIMENSIONS } = require("../domain/dimensions/dimensionRegistry");
+
+const { DIMENSIONS } = require("./dimensionRegistry");
 
 function cleanValue(v = "") {
   let s = String(v || "").trim();

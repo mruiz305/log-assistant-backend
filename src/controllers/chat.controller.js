@@ -53,8 +53,8 @@ const {
 } = require("../utils/chatContextLocks");
 
 /* ✅ DIMENSIONS */
-const { extractDimensionAndValue } = require("../utils/dimensionExtractor");
-const { resolveDimension } = require("../utils/dimensionResolver");
+const { extractDimensionAndValue } = require("../domain/dimensions/dimensionExtractor");
+const { resolveDimension } = require("../domain/dimensions/dimensionResolver");
 const { getDimension, listDimensions } = require("../domain/dimensions/dimensionRegistry");
 
 /* ✅ Helpers */
