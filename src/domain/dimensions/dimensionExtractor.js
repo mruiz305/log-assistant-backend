@@ -1,4 +1,4 @@
-
+// src/domain/dimensions/dimensionExtractor.js
 const { DIMENSIONS } = require("./dimensionRegistry");
 
 function cleanValue(v = "") {
@@ -144,8 +144,8 @@ function buildExplicitPatterns(lang = "es") {
  * 1) Si aparece un keyword explícito de dimensión => devuelve esa dimensión.
  * 2) Si NO hay explícita, intenta persona con patrones controlados:
  *    - "casos/logs de X"
- *    - "dame los casos de X"
- *    - "cases/logs for X" (en)
+ *    - "how many <metric> <X> has/did/got ..."
+ *    - "how many cases did X ..."
  *    - fallback: "de X" / "for X" (pero limpiando ruido)
  */
 function extractDimensionAndValue(message = "", lang = "es") {
@@ -166,8 +166,8 @@ function extractDimensionAndValue(message = "", lang = "es") {
 
   // 2) persona: patrones "casos/logs de X"
   const rxCasesOf = isEs
-    ? /\b(?:dame|mu[eé]strame|ver|lista|listado|casos|logs)\b[\s\S]{0,25}?\b(?:de|del)\s+([^\n,.;!?]{2,60})/i
-    : /\b(?:give\s+me|show\s+me|see|list|cases|logs)\b[\s\S]{0,25}?\b(?:of|for)\s+([^\n,.;!?]{2,60})/i;
+    ? /\b(?:dame|mu[eé]strame|ver|lista|listado|casos|logs)\b[\s\S]{0,25}?\b(?:de|del)\s+([^\n.;!?]{2,60})/i
+    : /\b(?:give\s+me|show\s+me|see|list|cases|logs)\b[\s\S]{0,25}?\b(?:of|for)\s+([^\n.;!?]{2,60})/i;
 
   let m = raw.match(rxCasesOf);
   if (m && m[1]) {
@@ -177,10 +177,74 @@ function extractDimensionAndValue(message = "", lang = "es") {
     }
   }
 
+  // =========================================================
+  // 2b) "how many <metric> <PERSON> has/did/got ..."
+  //     ✅ Cubre: "How many dropped Mariel has in 2025?"
+  // =========================================================
+  const KPI_WORDS_EN =
+    "(cases|logs|dropped|confirmed|problem|active|refer\\s*out|referout|converted|gross)";
+  const KPI_WORDS_ES =
+    "(casos|logs|caidos|caídos|confirmados|confirmadas|problema|problemas|activos|activas|referidos|referidas|convertidos|convertidas|brutos)";
+
+  const rxHowManyMetricHasEn = new RegExp(
+    String.raw`\\bhow\\s+many\\s+${KPI_WORDS_EN}\\s+(.{2,60}?)(?=\\s+\\b(has|have|did|got)\\b)`,
+    "i"
+  );
+
+  const rxHowManyMetricHasEs = new RegExp(
+    String.raw`\\bcu[aá]ntos?\\s+${KPI_WORDS_ES}\\s+(.{2,60}?)(?=\\s+\\b(tiene|tienen|hizo|tuvo|hace|realiz[oó])\\b)`,
+    "i"
+  );
+
+  if (!isEs) {
+    const mm = raw.match(rxHowManyMetricHasEn);
+    if (mm && mm[1]) {
+      const value = stripTrailingNoise(mm[1], lang);
+      if (value.length >= 2 && !looksLikePeriod(value, lang)) {
+        return { key: "person", value, matchType: "fallback_howmany_metric_has" };
+      }
+    }
+  } else {
+    const mm = raw.match(rxHowManyMetricHasEs);
+    if (mm && mm[1]) {
+      const value = stripTrailingNoise(mm[1], lang);
+      if (value.length >= 2 && !looksLikePeriod(value, lang)) {
+        return { key: "person", value, matchType: "fallback_howmany_metric_has" };
+      }
+    }
+  }
+
+  // =========================================================
+  // 2c) "how many cases/logs did <PERSON> ..."
+  // =========================================================
+  const rxCasesDidEn =
+    /\bhow\s+many\s+(?:cases|logs)\s+did\s+(.{2,60}?)(?=\s+\b(in|on|during|for)\b|[?.!,;:]|$)/i;
+
+  const rxCasesDidEs =
+    /\bcu[aá]ntos?\s+(?:casos|logs)\s+(?:hizo|hace|realiz[oó])\s+(.{2,60}?)(?=\s+\b(en|durante|para)\b|[?.!,;:]|$)/i;
+
+  if (!isEs) {
+    const mm = raw.match(rxCasesDidEn);
+    if (mm && mm[1]) {
+      const value = stripTrailingNoise(mm[1], lang);
+      if (value.length >= 2 && !looksLikePeriod(value, lang)) {
+        return { key: "person", value, matchType: "fallback_cases_did" };
+      }
+    }
+  } else {
+    const mm = raw.match(rxCasesDidEs);
+    if (mm && mm[1]) {
+      const value = stripTrailingNoise(mm[1], lang);
+      if (value.length >= 2 && !looksLikePeriod(value, lang)) {
+        return { key: "person", value, matchType: "fallback_cases_did" };
+      }
+    }
+  }
+
   // 3) fallback suave: "de X" / "for X" (pero evitando períodos)
   const rxPerson = isEs
-    ? /\b(?:de|del)\s+([^\n,.;!?]{2,60})/i
-    : /\b(?:of|for)\s+([^\n,.;!?]{2,60})/i;
+    ? /\b(?:de|del)\s+([^\n.;!?]{2,60})/i
+    : /\b(?:of|for)\s+([^\n.;!?]{2,60})/i;
 
   m = raw.match(rxPerson);
   if (m && m[1]) {

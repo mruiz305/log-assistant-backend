@@ -1,4 +1,4 @@
-const { classifyIntent } = require('./intent');
+const { classifyIntent } = require("../domain/intent/intent");
 
 /* ============================================================
    summarySanitizer.service

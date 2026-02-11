@@ -160,11 +160,41 @@ function injectPersonFromContext(msg, uiLang, lastPerson) {
   return `${msg} for ${lastPerson}`;
 }
 
-function mentionsPersonExplicitly(msg = '') {
-  const m = String(msg || '');
-  // “de X / for X” o keywords directos
-  return /(submittername|submitter|representante|rep|\bde\s+[\p{L}\p{N}]+|\bfor\s+[\p{L}\p{N}]+)/iu.test(m);
+function mentionsPersonExplicitly(msg = "", uiLang = "en") {
+  const m = String(msg || "");
+
+  // Lo que ya tenías (de X / for X / keywords)
+  const base =
+    /(submittername|submitter|representante|rep|\bde\s+[\p{L}\p{N}]+|\bfor\s+[\p{L}\p{N}]+)/iu.test(m);
+
+  if (base) return true;
+
+  // ✅ "how many cases/logs did Maria Chacon ..."
+  const howManyDidEn =
+    /\bhow\s+many\s+(?:cases|logs)\s+did\s+(.{2,60}?)(?=\s+\b(in|on|during|for)\b|[?.!,;:]|$)/i;
+
+  // ✅ "cuántos casos/logs hizo Maria Chacon ..."
+  const howManyDidEs =
+    /\bcu[aá]ntos?\s+(?:casos|logs)\s+(?:hizo|hace|realiz[oó])\s+(.{2,60}?)(?=\s+\b(en|durante|para)\b|[?.!,;:]|$)/i;
+
+  // ✅ NUEVO: "how many dropped/confirmed/active Mariel has ..."
+  // Captura "Mariel" como señal de persona.
+  const howManyMetricHasEn =
+    /\bhow\s+many\s+(?:dropped|drop|confirmed|active|problem|refer(?:\s*out)?)\s+(.{2,60}?)(?=\s+\b(has|have)\b|\s+\b(in|on|during|for)\b|[?.!,;:]|$)/i;
+
+  // ✅ NUEVO: "cuántos dropped/confirmados/activos ... tiene ..."
+  const howManyMetricHasEs =
+    /\bcu[aá]ntos?\s+(?:dropped|drop|confirmados?|activos?|problemas?|referidos?)\s+(.{2,60}?)(?=\s+\b(tiene|tienen)\b|\s+\b(en|durante|para)\b|[?.!,;:]|$)/i;
+
+  // Si no quieres depender de uiLang, evaluamos todos siempre:
+  return (
+    howManyDidEn.test(m) ||
+    howManyDidEs.test(m) ||
+    howManyMetricHasEn.test(m) ||
+    howManyMetricHasEs.test(m)
+  );
 }
+
 
 module.exports = {
   makeReqId,

@@ -1,8 +1,9 @@
-const openai = require('../infra/openai.client');
+const openai = require("../../../infra/openai.client");
 const fs = require('fs');
 const path = require('path');
-const { classifyIntent } = require('./intent');
-const { getAssistantProfile } = require('./assistantProfile');
+const { classifyIntent } = require('../../../domain/intent/intent');
+const { getAssistantProfile } = require('../../../services/assistantProfile');
+
 
 function normalizeText(s = '') {
   return (s || '')
@@ -218,7 +219,7 @@ SELECT
     100 * SUM(CASE WHEN Status LIKE '%DROP%' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0),
     2
   ) AS pct_dropped
-FROM performance_data.dmLogReportDashboard
+FROM dmLogReportDashboard
 ${where}
 GROUP BY YEAR(dateCameIn), MONTH(dateCameIn)
 ORDER BY anio, mes;
@@ -247,7 +248,7 @@ SELECT
   SUM(CASE WHEN Status LIKE '%PROBLEM%' AND Status LIKE '%30%' THEN 1 ELSE 0 END) AS problem_gt_30,
   SUM(CASE WHEN Status LIKE '%DROP%' THEN 1 ELSE 0 END) AS dropped_cases,
   SUM(CASE WHEN Status LIKE '%DROPPED%' AND Status LIKE '%60%' THEN 1 ELSE 0 END) AS dropped_gt_60
-FROM performance_data.dmLogReportDashboard
+FROM dmLogReportDashboard
 ${where}
 GROUP BY TeamName
 ORDER BY dropped_gt_60 DESC, problem_gt_30 DESC, dropped_cases DESC;
@@ -275,7 +276,7 @@ SELECT
   SUM(CASE WHEN Confirmed = 1 AND Status LIKE '%PROBLEM%' THEN 1 ELSE 0 END) AS confirmed_problem,
   SUM(CASE WHEN Confirmed = 1 AND Status LIKE '%DROP%' THEN 1 ELSE 0 END) AS confirmed_dropped_status,
   SUM(CASE WHEN Confirmed = 1 AND ClinicalStatus LIKE '%DROP%' THEN 1 ELSE 0 END) AS confirmed_clinical_dropped
-FROM performance_data.dmLogReportDashboard
+FROM dmLogReportDashboard
 ${where}
 GROUP BY OfficeName
 ORDER BY confirmed_problem DESC, confirmed_clinical_dropped DESC;
@@ -294,19 +295,21 @@ function safeLoadDataContract() {
   try {
     const contractPath = path.join(
       __dirname,
-      '..',
+      '..',        // services
+      '..',        // src
+      'application',
       'contracts',
       'dmLogReportDashboard.contract.v1.json'
     );
 
     const raw = fs.readFileSync(contractPath, 'utf8');
     const obj = JSON.parse(raw);
-
-    return JSON.stringify(obj); // compactado
-  } catch {
+    return JSON.stringify(obj);
+  } catch (e) {
     return '';
   }
 }
+
 
 function buildSchemaDescription(uiLang = 'en') {
   if (uiLang === 'es') {

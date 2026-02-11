@@ -315,20 +315,105 @@ function buildKpiPackSql(message, opts = {}) {
   // ✅ convertedValue real
   const sql = `
 SELECT
-  COUNT(*) AS gross_cases,
-  SUM(CASE WHEN Confirmed=1 THEN 1 ELSE 0 END) AS confirmed_cases,
-  ROUND(100 * SUM(CASE WHEN Confirmed=1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS confirmed_rate,
-  ROUND(SUM(COALESCE(convertedValue,0)), 2) AS case_converted_value,
-  SUM(CASE WHEN UPPER(Status) LIKE '%DROP%' THEN 1 ELSE 0 END) AS dropped_cases,
-  ROUND(100 * SUM(CASE WHEN UPPER(Status) LIKE '%DROP%' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS dropped_rate,
-  SUM(CASE WHEN UPPER(Status) LIKE '%PROBLEM%' THEN 1 ELSE 0 END) AS problem_cases,
-  ROUND(100 * SUM(CASE WHEN UPPER(Status) LIKE '%PROBLEM%' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS problem_rate,
-  SUM(CASE WHEN Confirmed=1 AND UPPER(Status) LIKE '%PROBLEM%' THEN 1 ELSE 0 END) AS leakage_confirmed_problem,
-  SUM(CASE WHEN Confirmed=1 AND UPPER(Status) LIKE '%DROP%' THEN 1 ELSE 0 END) AS leakage_confirmed_dropped_status,
-  SUM(CASE WHEN Confirmed=1 AND UPPER(ClinicalStatus) LIKE '%DROP%' THEN 1 ELSE 0 END) AS leakage_confirmed_clinical_dropped,
-  SUM(CASE WHEN Confirmed=0 AND UPPER(Status) LIKE '%ACTI%' THEN 1 ELSE 0 END) AS active_cases,
-  SUM(CASE WHEN Confirmed=0 AND UPPER(Status) LIKE '%REF%' THEN 1 ELSE 0 END) AS referout_cases
-FROM performance_data.dmLogReportDashboard
+ COUNT(*) AS gross_cases,
+
+SUM(CASE WHEN Confirmed=1 THEN 1 ELSE 0 END) AS confirmed_cases,
+ROUND(100 * SUM(CASE WHEN Confirmed=1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS confirmed_rate,
+
+ROUND(SUM(COALESCE(convertedValue,0)), 2) AS case_converted_value,
+
+SUM(CASE WHEN UPPER(Status) LIKE '%DROP%' THEN 1 ELSE 0 END) AS dropped_cases,
+ROUND(100 * SUM(CASE WHEN UPPER(Status) LIKE '%DROP%' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS dropped_rate,
+
+SUM(CASE WHEN UPPER(Status) LIKE '%PROBLEM%' THEN 1 ELSE 0 END) AS problem_cases,
+ROUND(100 * SUM(CASE WHEN UPPER(Status) LIKE '%PROBLEM%' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS problem_rate,
+
+SUM(CASE WHEN Confirmed=1 AND UPPER(Status) LIKE '%PROBLEM%' THEN 1 ELSE 0 END) AS leakage_confirmed_problem,
+SUM(CASE WHEN Confirmed=1 AND UPPER(Status) LIKE '%DROP%' THEN 1 ELSE 0 END) AS leakage_confirmed_dropped_status,
+SUM(CASE WHEN Confirmed=1 AND UPPER(ClinicalStatus) LIKE '%DROP%' THEN 1 ELSE 0 END) AS leakage_confirmed_clinical_dropped,
+
+/* ==========================
+   ✅ MÁS ESTADOS (OPEN / PIPELINE)
+   ========================== */
+
+/* Active (mejorado) */
+SUM(
+  CASE
+    WHEN Confirmed=0 AND (
+      UPPER(Status) LIKE '%ACTI%' OR
+      UPPER(Status) LIKE '%OPEN%' OR
+      UPPER(Status) LIKE '%IN PROGRESS%' OR
+      UPPER(Status) LIKE '%WORKING%'
+    )
+    THEN 1 ELSE 0
+  END
+) AS active_cases,
+
+/* Referout / Transfer */
+SUM(
+  CASE
+    WHEN Confirmed=0 AND (
+      UPPER(Status) LIKE '%REF%' OR
+      UPPER(Status) LIKE '%REFER%' OR
+      UPPER(Status) LIKE '%TRANSFER%'
+    )
+    THEN 1 ELSE 0
+  END
+) AS referout_cases,
+
+/* Pending / Waiting */
+SUM(
+  CASE
+    WHEN Confirmed=0 AND (
+      UPPER(Status) LIKE '%PEND%' OR
+      UPPER(Status) LIKE '%WAIT%' OR
+      UPPER(Status) LIKE '%HOLD%'
+    )
+    THEN 1 ELSE 0
+  END
+) AS pending_cases,
+
+/* Scheduled / Appointment */
+SUM(
+  CASE
+    WHEN Confirmed=0 AND (
+      UPPER(Status) LIKE '%SCHED%' OR
+      UPPER(Status) LIKE '%APPT%' OR
+      UPPER(Status) LIKE '%APPOINT%'
+    )
+    THEN 1 ELSE 0
+  END
+) AS scheduled_cases,
+
+/* No contact / Unreachable */
+SUM(
+  CASE
+    WHEN Confirmed=0 AND (
+      UPPER(Status) LIKE '%NO CONTACT%' OR
+      UPPER(Status) LIKE '%UNREACH%' OR
+      UPPER(Status) LIKE '%NO ANSWER%' OR
+      UPPER(Status) LIKE '%VOICEMAIL%' OR
+      UPPER(Status) LIKE '%VM%' OR
+      UPPER(Status) LIKE '%DISCONNECT%'
+    )
+    THEN 1 ELSE 0
+  END
+) AS unreachable_cases,
+
+/* Docs missing / Incomplete */
+SUM(
+  CASE
+    WHEN Confirmed=0 AND (
+      UPPER(Status) LIKE '%DOC%' OR
+      UPPER(Status) LIKE '%DOCUMENT%' OR
+      UPPER(Status) LIKE '%PAPERWORK%' OR
+      UPPER(Status) LIKE '%INCOMPLETE%'
+    )
+    THEN 1 ELSE 0
+  END
+) AS docs_missing_cases
+ 
+FROM dmLogReportDashboard
 ${whereClause};
 `.trim();
 

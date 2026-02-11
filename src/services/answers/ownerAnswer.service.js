@@ -1,8 +1,9 @@
 // src/services/ownerAnswer.service.js
-const openai = require("../infra/openai.client");
-const { sanitizeRowsForSummary } = require("./summarySanitizer.service");
-const { classifyIntent } = require("./intent");
-const { getAssistantProfile } = require("./assistantProfile");
+const openai = require("../../infra/openai.client");
+
+const { sanitizeRowsForSummary } = require("../summarySanitizer.service");
+const { classifyIntent } = require("../../domain/intent/intent")
+const { getAssistantProfile } = require("../assistantProfile");
 
 /** ✅ Detecta cuando el usuario quiere “análisis experto” */
 function wantsExpertAnalysis(q = "") {

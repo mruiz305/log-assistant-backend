@@ -1,4 +1,4 @@
-const { admin } = require('../infra/firebaseAdmin');
+const admin = require("../../../infra/firebaseAdmin");
 
 const DEFAULT_MEMORY = {
   preferredLang: null,          // 'es' | 'en'

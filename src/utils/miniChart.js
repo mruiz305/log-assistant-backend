@@ -28,7 +28,11 @@ function inferKindFromPreset(presetKey = "", question = "") {
   const p = String(presetKey || "").toLowerCase();
   const q = String(question || "").toLowerCase();
 
-  if (p.includes("dropped_last_3_months") || p.includes("dropped_3m") || /dropped.*3\s*months/.test(q)) {
+  if (
+    p.includes("dropped_last_3_months") ||
+    p.includes("dropped_3m") ||
+    /dropped.*3\s*months/.test(q)
+  ) {
     return "line";
   }
 
@@ -58,59 +62,119 @@ function pickKpi(kpiPack, keys = []) {
   return 0;
 }
 
+function labelCase(lang, key) {
+  const es = lang === "es";
+  const map = {
+    confirmed: es ? "Confirmados" : "Confirmed",
+    dropped: es ? "Caídos" : "Dropped",
+    problem: es ? "Problema" : "Problem",
+    active: es ? "Activos" : "Active",
+    referout: es ? "Referidos" : "Referout",
+
+    pending: es ? "Pendientes" : "Pending",
+    scheduled: es ? "Programados" : "Scheduled",
+    unreachable: es ? "No contact" : "Unreachable",
+    docs_missing: es ? "Docs faltantes" : "Docs missing",
+    signed: es ? "Firmados" : "Signed/Retained",
+
+    other: es ? "Otros/Abiertos" : "Other/Open",
+  };
+  return map[key] || (es ? "Otros" : "Other");
+}
+
 /**
  * ✅ DONUT SIEMPRE desde KPI PACK (misma fuente que tus cards)
- * Si el kpiPack trae distribución (confirmed/dropped/problem/active/referout), la usa.
- * Si NO la trae, hace fallback a confirmed/dropped/other usando gross.
+ * - Si el kpiPack trae distribución, la usa.
+ * - Agrega Other/Open si gross > suma de estados conocidos.
+ * - Centro del donut usa gross si existe.
  */
 function buildDonutFromKpiPack(lang, kpiPack, presetKey) {
   if (!kpiPack || typeof kpiPack !== "object") return null;
 
+  // Base
   const confirmed = pickKpi(kpiPack, ["confirmed_cases", "confirmed", "Confirmed"]);
   const dropped = pickKpi(kpiPack, ["dropped_cases", "dropped", "Dropped"]);
   const problem = pickKpi(kpiPack, ["problem_cases", "problem", "Problem"]);
   const active = pickKpi(kpiPack, ["active_cases", "active", "Active"]);
   const referout = pickKpi(kpiPack, ["referout_cases", "referout", "Referout", "referred_out", "referredOut"]);
 
-  const hasDistribution = (confirmed + dropped + problem + active + referout) > 0;
+  // ✅ Nuevos estados (si tu SQL los devuelve)
+  const pending = pickKpi(kpiPack, ["pending_cases", "pending"]);
+  const scheduled = pickKpi(kpiPack, ["scheduled_cases", "scheduled"]);
+  const unreachable = pickKpi(kpiPack, ["unreachable_cases", "unreachable"]);
+  const docsMissing = pickKpi(kpiPack, ["docs_missing_cases", "docs_missing", "docsMissing"]);
+  const signed = pickKpi(kpiPack, ["signed_cases", "signed"]);
+
+  // Total real (ideal): gross/ttd/total
+  const gross = pickKpi(kpiPack, ["gross_cases", "ttd", "total", "Total"]);
+
+  const hasDistribution =
+    confirmed +
+      dropped +
+      problem +
+      active +
+      referout +
+      pending +
+      scheduled +
+      unreachable +
+      docsMissing +
+      signed >
+    0;
 
   let labels = [];
   let values = [];
   let colors = [];
 
   if (hasDistribution) {
+    // ✅ Colores: mantenemos consistencia con los que ya usas
     const points = [
-      { label: lang === "es" ? "Confirmed" : "Confirmed", value: confirmed, color: "#22c55e" },
-      { label: "Dropped", value: dropped, color: "#eab308" },
-      { label: "Problem", value: problem, color: "#ef4444" },
-      { label: lang === "es" ? "Active" : "Active", value: active, color: "#3b82f6" },
-      { label: "Referout", value: referout, color: "#94a3b8" },
+      { key: "confirmed", value: confirmed, color: "#22c55e" },
+      { key: "dropped", value: dropped, color: "#eab308" },
+      { key: "problem", value: problem, color: "#ef4444" },
+      { key: "active", value: active, color: "#3b82f6" },
+      { key: "referout", value: referout, color: "#94a3b8" },
+
+      // nuevos
+      { key: "pending", value: pending, color: "#a855f7" },
+      { key: "scheduled", value: scheduled, color: "#06b6d4" },
+      { key: "unreachable", value: unreachable, color: "#f97316" },
+      { key: "docs_missing", value: docsMissing, color: "#f43f5e" },
+      { key: "signed", value: signed, color: "#10b981" },
     ].filter((p) => p.value > 0);
 
+    // si solo hay 1 categoría, no aporta donut
     if (points.length < 2) return null;
 
-    labels = points.map((p) => p.label);
+    // ✅ Si gross existe y hay “faltante”, agrega Other/Open
+    const sumKnown = points.reduce((acc, p) => acc + (p.value || 0), 0);
+    const other = gross > 0 ? Math.max(0, gross - sumKnown) : 0;
+
+    if (gross > 0 && other > 0) {
+      points.push({ key: "other", value: other, color: "#64748b" });
+    }
+
+    labels = points.map((p) => labelCase(lang, p.key));
     values = points.map((p) => p.value);
     colors = points.map((p) => p.color);
   } else {
-    // fallback mínimo si tu kpiPack no trae active/referout/etc.
-    const gross = pickKpi(kpiPack, ["gross_cases", "ttd", "total", "Total"]);
+    // fallback mínimo si tu kpiPack no trae distribución
     const other = Math.max(0, gross - confirmed - dropped);
 
     const points = [
-      { label: lang === "es" ? "Confirmed" : "Confirmed", value: confirmed, color: "#22c55e" },
-      { label: "Dropped", value: dropped, color: "#eab308" },
-      { label: lang === "es" ? "Other" : "Other", value: other, color: "#94a3b8" },
+      { key: "confirmed", value: confirmed, color: "#22c55e" },
+      { key: "dropped", value: dropped, color: "#eab308" },
+      { key: "other", value: other, color: "#64748b" },
     ].filter((p) => p.value > 0);
 
     if (points.length < 2) return null;
 
-    labels = points.map((p) => p.label);
+    labels = points.map((p) => labelCase(lang, p.key));
     values = points.map((p) => p.value);
     colors = points.map((p) => p.color);
   }
 
-  const total = values.reduce((a, b) => a + b, 0);
+  const sum = values.reduce((a, b) => a + b, 0);
+  const centerTotal = gross > 0 ? gross : sum;
 
   return {
     kind: "donut",
@@ -118,7 +182,7 @@ function buildDonutFromKpiPack(lang, kpiPack, presetKey) {
     labels,
     values,
     colors,
-    center: { label: lang === "es" ? "Total" : "Total", value: total },
+    center: { label: lang === "es" ? "Total" : "Total", value: centerTotal },
     meta: { presetKey: presetKey || null, source: "kpi_pack" },
   };
 }

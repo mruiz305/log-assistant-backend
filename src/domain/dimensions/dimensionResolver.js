@@ -9,11 +9,11 @@ function isOfficeOfPersonPhrase(message = '', lang = 'es') {
 }
 
 // Resuelve OfficeName a partir de un submitterName (persona)
-async function resolveOfficeNameByPerson(poolConn, personName) {
-  const p = String(personName || '').trim();
+async function resolveOfficeNameByPerson(sqlRepo, personName) {
+  const p = String(personName || "").trim();
   if (!p) return null;
 
-  const [rows] = await poolConn.query(
+  const rows = await sqlRepo.query(
     `
     SELECT TRIM(OfficeName) AS officeName, COUNT(*) AS cnt
     FROM dmLogReportDashboard
@@ -32,11 +32,12 @@ async function resolveOfficeNameByPerson(poolConn, personName) {
   return rows?.[0]?.officeName ? String(rows[0].officeName).trim() : null;
 }
 
+
 /**
  * Entrada: { key, value } (del extractor)
  * Salida: { key, column, value, meta }
  */
-async function resolveDimension(poolConn, extracted, message, lang = 'es') {
+async function resolveDimension(sqlRepo, extracted, message, lang = 'es') {
   if (!extracted?.key || !extracted?.value) return null;
 
   const key = String(extracted.key).trim();
@@ -47,7 +48,7 @@ async function resolveDimension(poolConn, extracted, message, lang = 'es') {
 
   // ✅ Caso especial: "oficina de PERSONA" => resolver OfficeName real
   if (key === 'office' && isOfficeOfPersonPhrase(message, lang)) {
-    const officeName = await resolveOfficeNameByPerson(poolConn, rawValue);
+    const officeName = await resolveOfficeNameByPerson(sqlRepo, rawValue);
     if (officeName) {
       return {
         key: 'office',

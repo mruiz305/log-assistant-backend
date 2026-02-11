@@ -1,6 +1,6 @@
 {
   "version": "v1",
-  "table": "performance_data.dmLogReportDashboard",
+  "table": "dmLogReportDashboard",
   "readOnly": true,
   "datasetTruths": [
     "This table is current-state (not historical): each idLead appears once and represents the latest state.",
