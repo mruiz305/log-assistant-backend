@@ -1,4 +1,4 @@
-// src/utils/sqlPreflight.js
+
 async function preflightExplain(pool, safeSql) {
   const sql = String(safeSql || '').trim();
   if (!sql) throw new Error('SQL vacío para preflight');

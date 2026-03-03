@@ -1,4 +1,4 @@
-// src/application/chat/pipeline/sql.pipeline.js
+
 const { normalizeAnalyticsSql } = require("../../../domain/sql/sqlNormalize.service");
 const { enforceOnlyFullGroupBy } = require("../../../domain/sql/sqlRules.service");
 

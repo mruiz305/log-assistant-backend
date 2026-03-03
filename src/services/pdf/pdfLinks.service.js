@@ -1,4 +1,3 @@
-// src/services/pdf/pdfLinks.service.js
 
 function wantsPdfLinks(message = "") {
   return /(pdf|url|link|enlace|log\b|logs\b|log completo|full log|roster|reporte|report|details)/i.test(
@@ -116,7 +115,7 @@ function buildNeedle(token = "") {
 }
 
 /**
- * ✅ Ahora este método espera sqlRepo (no mysql2 pool)
+ * Ahora este método espera sqlRepo (no mysql2 pool)
  * sqlRepo.query(sql, params) debe devolver rows (array)
  */
 async function findUserPdfCandidates(sqlRepo, text = "", limit = 8) {
@@ -131,7 +130,7 @@ async function findUserPdfCandidates(sqlRepo, text = "", limit = 8) {
 
   if (!tokens.length) return [];
 
-  // ✅ Construye AND por token, pero usando LIKE ? con %token% ya armado
+  // Construye AND por token, pero usando LIKE ? con %token% ya armado
   const andConds = tokens.slice(0, 4).map(
     () => `(LOWER(TRIM(name)) LIKE ? OR LOWER(TRIM(nick)) LIKE ?)`
   );

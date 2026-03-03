@@ -1,4 +1,4 @@
-// src/application/dashboard/handlers/executiveSummary.handler.js
+
 const { generateExecutiveSummary } = require("../../../services/executiveSummary.service");
 
 async function runExecutiveSummary({ lang, windowLabel, kpis, userName }) {

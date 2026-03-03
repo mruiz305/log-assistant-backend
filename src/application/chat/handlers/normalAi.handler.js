@@ -1,4 +1,4 @@
-// src/application/chat/handlers/normalAi.handler.js
+
 const sqlRepo = require("../../../repos/sql.repo");
 
 /* Guard */
@@ -147,12 +147,12 @@ async function handleNormalAi({
           const chosen = String(reps[0].submitter).trim();
           filters.person = { value: chosen, locked: true, exact: true };
 
-          // ✅ NO perder otros locks: merge desde ctx
+          // NO perder otros locks: merge desde ctx
           persistContextFilters({ cid, filters, lastPerson: chosen, pdfUser: null });
         } else if (Array.isArray(reps) && reps.length === 0) {
           filters.person = { value: explicitPersonRaw, locked: true, exact: false };
 
-          // ✅ NO perder otros locks: merge desde ctx
+          // NO perder otros locks: merge desde ctx
           persistContextFilters({ cid, filters, lastPerson: explicitPersonRaw, pdfUser: null });
         }
       }

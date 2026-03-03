@@ -1,4 +1,4 @@
-// src/repos/dashboard.repo.js
+
 const sqlRepo = require("./sql.repo");
 
 async function getTopRepsMTD(limit = 10) {
@@ -24,7 +24,7 @@ async function getTopRepsMTD(limit = 10) {
   return sqlRepo.query(sql, [Number(limit) || 10]);
 }
 
-// ✅ básico (si lo usas en algún widget simple)
+// básico 
 async function getMonthKpisBasic() {
   const sql = `
     SELECT

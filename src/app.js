@@ -13,7 +13,7 @@ const dashboardRoute = require("./routes/dashboard.route");
 
 const app = express();
 
-// ✅ importante si estás detrás de Nginx/Proxy
+// importante si estás detrás de Nginx/Proxy
 app.set("trust proxy", 1);
 
 // 1) request id (para logs/debug)
@@ -40,7 +40,7 @@ const corsOptions = {
   credentials: false,
 };
 
-// ✅ Preflight (OPTIONS) sin usar app.options() wildcard (evita PathError)
+// Preflight (OPTIONS) sin usar app.options() wildcard (evita PathError)
 app.use((req, res, next) => {
   if (req.method === "OPTIONS") {
     return cors(corsOptions)(req, res, next);

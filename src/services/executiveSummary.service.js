@@ -1,4 +1,4 @@
-// services/executiveSummary.service.js
+
 const openai = require('../infra/openai.client');
 const { getAssistantProfile } = require('./assistantProfile');
 

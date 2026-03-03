@@ -1,4 +1,4 @@
-// src/utils/personDetect.js
+
 const { mentionsPersonExplicitly } = require("./chatRoute.helpers");
 const { extractPersonNameFromMessage } = require("./personRewrite");
 

@@ -1,6 +1,6 @@
 // src/utils/miniChart.js
 // MiniChart debe aparecer SOLO cuando aporta valor visual.
-// ✅ Enforcing by preset:
+// Enforcing by preset:
 // - dropped_last_3_months => line (tendencia mensual)
 // - summary/last_7_days/this_month/confirmed_month => donut (distribución)
 // - top_reps => bar (ranking)
@@ -23,7 +23,7 @@ function inferTopN(question = "") {
   return 10;
 }
 
-/** ✅ Decide kind 100% por preset (y fallback por texto) */
+/** Decide kind 100% por preset (y fallback por texto) */
 function inferKindFromPreset(presetKey = "", question = "") {
   const p = String(presetKey || "").toLowerCase();
   const q = String(question || "").toLowerCase();
@@ -54,7 +54,7 @@ function inferKindFromPreset(presetKey = "", question = "") {
   return null;
 }
 
-// ✅ helper: leer keys alternativos del kpiPack
+// helper: leer keys alternativos del kpiPack
 function pickKpi(kpiPack, keys = []) {
   for (const k of keys) {
     if (kpiPack && Object.prototype.hasOwnProperty.call(kpiPack, k)) return safeNum(kpiPack[k], 0);
@@ -83,7 +83,7 @@ function labelCase(lang, key) {
 }
 
 /**
- * ✅ DONUT SIEMPRE desde KPI PACK (misma fuente que tus cards)
+ * DONUT SIEMPRE desde KPI PACK (misma fuente que tus cards)
  * - Si el kpiPack trae distribución, la usa.
  * - Agrega Other/Open si gross > suma de estados conocidos.
  * - Centro del donut usa gross si existe.
@@ -98,7 +98,7 @@ function buildDonutFromKpiPack(lang, kpiPack, presetKey) {
   const active = pickKpi(kpiPack, ["active_cases", "active", "Active"]);
   const referout = pickKpi(kpiPack, ["referout_cases", "referout", "Referout", "referred_out", "referredOut"]);
 
-  // ✅ Nuevos estados (si tu SQL los devuelve)
+  // Nuevos estados (si tu SQL los devuelve)
   const pending = pickKpi(kpiPack, ["pending_cases", "pending"]);
   const scheduled = pickKpi(kpiPack, ["scheduled_cases", "scheduled"]);
   const unreachable = pickKpi(kpiPack, ["unreachable_cases", "unreachable"]);
@@ -126,7 +126,7 @@ function buildDonutFromKpiPack(lang, kpiPack, presetKey) {
   let colors = [];
 
   if (hasDistribution) {
-    // ✅ Colores: mantenemos consistencia con los que ya usas
+    // Colores: mantenemos consistencia con los que ya usas
     const points = [
       { key: "confirmed", value: confirmed, color: "#22c55e" },
       { key: "dropped", value: dropped, color: "#eab308" },
@@ -145,7 +145,7 @@ function buildDonutFromKpiPack(lang, kpiPack, presetKey) {
     // si solo hay 1 categoría, no aporta donut
     if (points.length < 2) return null;
 
-    // ✅ Si gross existe y hay “faltante”, agrega Other/Open
+    // Si gross existe y hay “faltante”, agrega Other/Open
     const sumKnown = points.reduce((acc, p) => acc + (p.value || 0), 0);
     const other = gross > 0 ? Math.max(0, gross - sumKnown) : 0;
 
@@ -188,7 +188,7 @@ function buildDonutFromKpiPack(lang, kpiPack, presetKey) {
 }
 
 /**
- * ✅ LINE: Dropped last 3 months (tendencia por mes)
+ * LINE: Dropped last 3 months (tendencia por mes)
  * Espera rows con algo como: month + dropped_rate OR dropped_cases
  */
 function buildDroppedTrendLine(lang, rows, presetKey) {
@@ -230,7 +230,7 @@ function buildDroppedTrendLine(lang, rows, presetKey) {
 }
 
 /**
- * ✅ BAR: Top reps (ranking)
+ * BAR: Top reps (ranking)
  * Si rows ya trae columnas de ranking (submitterName + confirmed/ttd/etc) usa eso.
  * Si no, hace fallback contando ocurrencias por submitterName/submitter.
  */
@@ -311,7 +311,7 @@ function buildMiniChart(question, lang, { kpiPack, rows, presetKey } = {}) {
     return buildDroppedTrendLine(lang, rows, presetKey);
   }
 
-  // ✅ 3) BAR: top_reps (siempre desde rows)
+  // 3) BAR: top_reps (siempre desde rows)
   if (kind === "bar") {
     return buildTopRepsBar(question, lang, rows, presetKey);
   }

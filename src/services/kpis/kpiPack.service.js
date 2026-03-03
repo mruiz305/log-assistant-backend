@@ -2,8 +2,8 @@
    KPI Pack SQL Builder (Time Window + Dimension filters)
    - 1 fila con KPIs
    - Usa dateCameIn como fecha principal
-   - ✅ Default: si NO detecta ventana de tiempo, ASUME "este mes"
-   - ✅ Column real: convertedValue (según tu DDL)
+   - Default: si NO detecta ventana de tiempo, ASUME "este mes"
+   - Column real: convertedValue (según tu DDL)
    ============================================================ */
 
 function normalizeText(s = "") {
@@ -221,7 +221,7 @@ function extractTimeWindow(question, lang = "es", defaultWindowDays = null) {
   return { matched: false, where: "", label: makeLabel("no_time", null, null, lang) };
 }
 
-/** ✅ Default: si no hay tiempo, aplica ESTE MES */
+/** Default: si no hay tiempo, aplica ESTE MES */
 function defaultThisMonthWindow(lang = "es") {
   return {
     matched: true,
@@ -256,7 +256,7 @@ function buildKpiPackSql(message, opts = {}) {
  // 1) Extraer ventana desde el mensaje
   let w = extractTimeWindow(message, lang, opts.defaultWindowDays ?? null);
 
-  // 2) ✅ Si NO hubo match, forzar ESTE MES
+  // 2) Si NO hubo match, forzar ESTE MES
   if (!w?.matched) {
     w = defaultThisMonthWindow(lang);
   }
@@ -271,7 +271,7 @@ function buildKpiPackSql(message, opts = {}) {
   if (timeClause) whereParts.push(timeClause);
 
 
-   // ✅ filtros (nuevo): viene del route como opts.filters
+   // filtros (nuevo): viene del route como opts.filters
   const filters = opts.filters || {};
 
   // mapping seguro a columnas reales
@@ -302,7 +302,7 @@ function buildKpiPackSql(message, opts = {}) {
     if (!def?.col) continue;
 
     if (key === "person") {
-      // ✅ persona SIEMPRE por submitterName/submitter (coalesce)
+      // persona SIEMPRE por submitterName/submitter (coalesce)
       pushLike(def.col, v);
     } else {
       pushLike(def.col, v);
@@ -341,9 +341,7 @@ SUM(
   CASE
     WHEN Confirmed=0 AND (
       UPPER(Status) LIKE '%ACTI%' OR
-      UPPER(Status) LIKE '%OPEN%' OR
-      UPPER(Status) LIKE '%IN PROGRESS%' OR
-      UPPER(Status) LIKE '%WORKING%'
+      UPPER(Status) LIKE '%OPEN%'
     )
     THEN 1 ELSE 0
   END
@@ -354,8 +352,7 @@ SUM(
   CASE
     WHEN Confirmed=0 AND (
       UPPER(Status) LIKE '%REF%' OR
-      UPPER(Status) LIKE '%REFER%' OR
-      UPPER(Status) LIKE '%TRANSFER%'
+      UPPER(Status) LIKE '%REFER%' 
     )
     THEN 1 ELSE 0
   END
@@ -365,9 +362,7 @@ SUM(
 SUM(
   CASE
     WHEN Confirmed=0 AND (
-      UPPER(Status) LIKE '%PEND%' OR
-      UPPER(Status) LIKE '%WAIT%' OR
-      UPPER(Status) LIKE '%HOLD%'
+      UPPER(Status) LIKE '%PEND%' 
     )
     THEN 1 ELSE 0
   END

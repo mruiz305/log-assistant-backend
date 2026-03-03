@@ -60,7 +60,7 @@ function topN(rows, key, n = 3) {
  * }
  */
 function sanitizeRowsForSummary(question, rows) {
-  // ✅ classifyIntent ahora devuelve objeto
+  // classifyIntent ahora devuelve objeto
   const intentInfo = classifyIntent(question);
   const intent = intentInfo?.intent || 'general';
 

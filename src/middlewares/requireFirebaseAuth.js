@@ -1,4 +1,4 @@
-// src/middlewares/requireFirebaseAuth.js
+
 const { admin } = require('../infra/firebaseAdmin');
 
 function parseAllowedDomains() {

@@ -1,4 +1,4 @@
-// src/application/chat/handlers/performance.handler.js
+
 const sqlRepo = require("../../../repos/sql.repo");
 
 const { buildOwnerAnswer } = require("../../../services/answers/ownerAnswer.service");

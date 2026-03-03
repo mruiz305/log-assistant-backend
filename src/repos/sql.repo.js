@@ -1,4 +1,4 @@
-// src/repos/sql.repo.js
+
 const pool = require("../infra/db.pool");
 
 /**

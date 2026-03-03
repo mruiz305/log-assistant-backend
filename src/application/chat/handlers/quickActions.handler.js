@@ -1,4 +1,4 @@
-// src/application/chat/handlers/quickActions.handler.js
+
 const sqlRepo = require("../../../repos/sql.repo");
 
 const { getUserName } = require("../../../domain/context/userProfile");

@@ -1,4 +1,3 @@
-// src/utils/quickActions.js
 
 function normalizeQuickActionMessage(msg = "", uiLang = "en") {
   return String(msg || "").trim();
@@ -64,7 +63,7 @@ function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
   // Inyección de persona (si existe lock en contexto)
   const { whereSql: personWhere, params: personParams } = getPersonFilterWhereAndParams(filters);
 
-  // ✅ UI: Last 7 days -> serie por día
+  // UI: Last 7 days -> serie por día
   if (/^last\s+7\s+days$/i.test(m)) {
     const sql = `
       SELECT
@@ -88,7 +87,7 @@ function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
     };
   }
 
-  // ✅ UI: This month -> serie por día
+  // UI: This month -> serie por día
   if (/^this\s+month$/i.test(m)) {
     const sql = `
       SELECT
@@ -112,7 +111,7 @@ function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
     };
   }
 
-  // ✅ UI: See dropped -> últimos 3 meses por mes
+  // UI: See dropped -> últimos 3 meses por mes
   if (/^see\s+dropped$/i.test(m)) {
     const sql = `
       SELECT
@@ -138,7 +137,7 @@ function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
     };
   }
 
-  // ✅ UI: Top reps -> top 10 submitters (serie)
+  // UI: Top reps -> top 10 submitters (serie)
   if (/^top\s+reps$/i.test(m)) {
     const sql = `
       SELECT

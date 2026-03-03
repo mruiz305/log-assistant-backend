@@ -1,4 +1,4 @@
-// src/routes/chat.route.js
+
 const express = require("express");
 const router = express.Router();
 

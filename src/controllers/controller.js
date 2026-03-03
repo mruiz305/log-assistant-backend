@@ -52,12 +52,12 @@ const {
   buildSqlFixMessage,
 } = require("../utils/chatContextLocks");
 
-/* ✅ DIMENSIONS */
+/* DIMENSIONS */
 const { extractDimensionAndValue } = require("../domain/dimensions/dimensionExtractor");
 const { resolveDimension } = require("../domain/dimensions/dimensionResolver");
 const { getDimension, listDimensions } = require("../domain/dimensions/dimensionRegistry");
 
-/* ✅ Helpers */
+/* Helpers */
 const {
   makeReqId,
   shouldLogSql,
@@ -391,7 +391,7 @@ function buildPerformanceCards(uiLang, { windowLabel, name, kpi }) {
 
 /* =========================
    TOP QUICK ACTIONS
-   ✅ AHORA reconoce los labels que tu UI manda
+   AHORA reconoce los labels que tu UI manda
 ========================= */
 function isTopQuickAction(msg = "") {
   const m = String(msg || "").trim();
@@ -426,7 +426,7 @@ function clearContextForQuickAction(cid) {
 }
 
 /**
- * ✅ Quick actions devuelven SERIES (rows >= 2) para que el chart salga.
+ * Quick actions devuelven SERIES (rows >= 2) para que el chart salga.
  * También devuelve un kpiPack derivado cuando aplica.
  */
 function buildTopQuickActionSql(actionMsg, uiLang) {
@@ -438,7 +438,7 @@ function buildTopQuickActionSql(actionMsg, uiLang) {
   const last7Start = `DATE_SUB(CURDATE(), INTERVAL 6 DAY)`; // 7 días incluyendo hoy
   const tomorrow = `DATE_ADD(CURDATE(), INTERVAL 1 DAY)`;
 
-  // ✅ UI: Last 7 days -> serie por día
+  // UI: Last 7 days -> serie por día
   if (/^last\s+7\s+days$/i.test(m)) {
     const sql = `
       SELECT
@@ -461,7 +461,7 @@ function buildTopQuickActionSql(actionMsg, uiLang) {
     };
   }
 
-  // ✅ UI: This month -> serie por día
+  // UI: This month -> serie por día
   if (/^this\s+month$/i.test(m)) {
     const sql = `
       SELECT
@@ -484,7 +484,7 @@ function buildTopQuickActionSql(actionMsg, uiLang) {
     };
   }
 
-  // ✅ UI: See dropped -> últimos 3 meses por mes
+  // UI: See dropped -> últimos 3 meses por mes
   if (/^see\s+dropped$/i.test(m)) {
     const sql = `
       SELECT
@@ -509,7 +509,7 @@ function buildTopQuickActionSql(actionMsg, uiLang) {
     };
   }
 
-  // ✅ UI: Top reps -> top 10 submitters (serie)
+  // UI: Top reps -> top 10 submitters (serie)
   if (/^top\s+reps$/i.test(m)) {
     const sql = `
       SELECT
@@ -1045,7 +1045,7 @@ function buildSqlPipeline(rawSql, questionForAi, opts = {}) {
 }
 
 function normalizeQuickActionMessage(msg = "", uiLang = "en") {
-  // ✅ Ya no “renombramos” quick actions; el UI manda strings exactos.
+  // Ya no “renombramos” quick actions; el UI manda strings exactos.
   return String(msg || "").trim();
 }
 
@@ -1084,14 +1084,14 @@ async function postChat(req, res) {
 
   let effectiveMessage = normalizeQuickActionMessage(String(message || "").trim(), uiLang);
 
-  // ✅ Detecta Quick Action con el texto REAL que manda tu UI
+  // Detecta Quick Action con el texto REAL que manda tu UI
   const topQuickAction = isTopQuickAction(effectiveMessage);
 
-  // ✅ Quick Action => limpiar contexto para que sea global
+  // Quick Action => limpiar contexto para que sea global
   if (cid && topQuickAction) clearContextForQuickAction(cid);
 
   /* =====================================================
-     ✅ TOP QUICK ACTIONS (NO IA)
+     TOP QUICK ACTIONS (NO IA)
      Devuelve series para chart + cards bonitos
   ===================================================== */
   if (topQuickAction) {
@@ -1131,7 +1131,7 @@ async function postChat(req, res) {
       });
     }
 
-    // ✅ kpiPack:
+    // kpiPack:
     // - Si la query devuelve KPI pack row, úsalo.
     // - Si devuelve series, derivamos kpiPack sumando.
     let kpiPack = null;
@@ -1153,7 +1153,7 @@ async function postChat(req, res) {
       kpiPack = sum;
     }
 
-    // ✅ Answer (texto legacy) + Cards (bonito)
+    // Answer (texto legacy) + Cards (bonito)
     const legacyAnswer = await buildOwnerAnswer(
       `${effectiveMessage} (${qa.windowLabel})`,
       qa.sql,
@@ -1443,7 +1443,7 @@ async function postChat(req, res) {
     }
 
     /* =====================================================
-       ✅ PDF LINKS FAST PATH
+        PDF LINKS FAST PATH
     ======================================================= */
     const ctxNow = cid ? getContext(cid) || {} : {};
     const rememberedPdfUserId = ctxNow?.pdfUser?.id ? String(ctxNow.pdfUser.id) : null;
@@ -1647,7 +1647,7 @@ function detectPerformanceWindowExpr(msg = "", uiLang = "en") {
     windowLabel: uiLang === "es" ? "Mes en curso" : "Month-to-date",
   };
 }
-// ✅ PERFORMANCE FAST PATH (NO IA)
+// PERFORMANCE FAST PATH (NO IA)
 if (wantsPerformance(messageWithDefaultPeriod)) {
   const groupKey = detectPerformanceGroupKey(messageWithDefaultPeriod, uiLang);
   const groupBy = resolvePerformanceGroupBy(groupKey);
@@ -1691,18 +1691,18 @@ if (wantsPerformance(messageWithDefaultPeriod)) {
     });
   }
 
-  // ✅ Tomamos la fila principal (cuando hay filtro de persona casi siempre es 1 row)
+  // Tomamos la fila principal (cuando hay filtro de persona casi siempre es 1 row)
   const kpi = Array.isArray(perfRows) && perfRows[0] ? perfRows[0] : null;
   const pickedName = kpi?.name || kpi?.submitterName || filters?.person?.value || null;
 
-  // ✅ Cards con tus KPIs: ttd, confirmed, confirmationRate, dropped_cases, dropped_rate, convertedValue
+  // Cards con tus KPIs: ttd, confirmed, confirmationRate, dropped_cases, dropped_rate, convertedValue
   const cards = buildPerformanceCards(uiLang, {
     windowLabel: win.windowLabel,
     name: pickedName,
     kpi,
   });
 
-  // ✅ Answer legacy (si quieres mantener texto)
+  // Answer legacy
   const answer = await buildOwnerAnswer(
     `${messageWithDefaultPeriod} (${win.windowLabel})`,
     perfSql,
@@ -1711,7 +1711,7 @@ if (wantsPerformance(messageWithDefaultPeriod)) {
       lang: uiLang,
       userName,
       mode: "performance_leaderboard",
-      kpiPack: kpi,          // ✅ importante: pasamos los números
+      kpiPack: kpi,          
       kpiWindow: win.windowLabel,
     }
   );
@@ -1724,7 +1724,7 @@ if (wantsPerformance(messageWithDefaultPeriod)) {
   return res.json({
     ok: true,
     answer,
-    cards,                 // ✅ esto es lo que te faltaba para que el UI muestre el resumen correcto
+    cards,                 // esto es lo que te faltaba para que el UI muestre el resumen correcto
     rowCount: perfRows.length,
     aiComment: "performance_leaderboard",
     userName,
@@ -1982,14 +1982,14 @@ if (wantsPerformance(messageWithDefaultPeriod)) {
       userName,
     });
 
-   // ✅ Chart gating (NORMAL MODE): usa rows reales
+   // Chart gating (NORMAL MODE): usa rows reales
     const chartWanted = shouldShowChartPayload({ topQuickAction: false, rows });
     const chart = chartWanted
       ? buildMiniChart(messageWithDefaultPeriod, uiLang, { kpiPack, rows })
       : null;
 
 
-    // ✅ Cards bonitos si hay KPI pack
+    // Cards bonitos si hay KPI pack
     const cards = kpiPack ? buildInsightCards(uiLang, { windowLabel: kpiWindow, kpiPack, mode: "normal" }) : null;
 
     return res.json({

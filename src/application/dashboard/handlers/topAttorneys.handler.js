@@ -1,4 +1,4 @@
-// src/application/dashboard/handlers/topAttorneys.handler.js
+
 const dashboardRepo = require("../../../repos/dashboard.repo");
 
 async function runTopAttorneys(limit = 10) {

@@ -1,4 +1,4 @@
-// src/utils/greeting.js
+
 function isGreeting(message = "") {
   const m = String(message || "").trim().toLowerCase();
   return /^(hola|hello|hi|buenas|buenos dias|good morning|good afternoon|good evening)\b/i.test(m);

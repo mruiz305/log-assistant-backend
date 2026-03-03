@@ -1,4 +1,4 @@
-// src/utils/sqlText.js
+
 function normalizeBrokenWhere(sql) {
   if (!sql) return sql;
   let s = String(sql).trim();

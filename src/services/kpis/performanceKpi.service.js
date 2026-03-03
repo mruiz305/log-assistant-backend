@@ -1,6 +1,6 @@
 // src/services/performanceKpi.service.js
 
-// ✅ Usar la inyección parametrizada (NO utils/dimension.js)
+// Usar la inyección parametrizada (NO utils/dimension.js)
 const {
   injectColumnTokensLike,
   injectSubmitterTokensLike,
@@ -83,7 +83,7 @@ function buildPerformanceKpiSql({
 
   // filtros opcionales
   if (filters && typeof filters === "object") {
-    // ✅ PERSON: usa fallback COALESCE(NULLIF(submitterName,''), submitter)
+    // PERSON: usa fallback COALESCE(NULLIF(submitterName,''), submitter)
     //    (viene en injectSubmitterTokensLike)
     const personF = readFilter(filters.person);
     if (personF.locked && personF.value) {

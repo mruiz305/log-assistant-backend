@@ -7,7 +7,7 @@ function normalizeText(s = '') {
 }
 
 /**
- * ✅ COMPAT con sqlBuilder: retorna STRING como siempre
+ * COMPAT con sqlBuilder: retorna STRING como siempre
  */
 function classifyIntent(question = '') {
   const q = normalizeText(question);
@@ -32,7 +32,7 @@ function classifyIntent(question = '') {
 function classifyIntentInfo(question = '') {
   const q = normalizeText(question);
 
-  // ✅ 0) PROFILE / NAME SETTING => NO SQL
+  // 0) PROFILE / NAME SETTING => NO SQL
   // Ej: "me llamo Ana", "mi nombre es Ana", "soy Ana", "my name is Ana", "I'm Ana"
   const isProfile =
     /\b(me\s+llamo|mi\s+nombre\s+es|soy)\b/.test(q) ||
@@ -60,7 +60,7 @@ function classifyIntentInfo(question = '') {
 }
 
 /**
- * ✅ Ahora soporta nombre opcional
+ * Ahora soporta nombre opcional
  * buildHelpAnswer(lang, { userName })
  */
 function buildHelpAnswer(lang = 'en', opts = {}) {

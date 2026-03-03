@@ -1,5 +1,4 @@
-// src/application/chat/pipeline/filterInjection.js
-//
+
 // Inyección de filtros LOCKED usando LIKE + parámetros, de forma idempotente.
 // - Para dimensiones normales: LOWER(TRIM(col)) LIKE %token% AND ...
 // - Para PERSON: usa COALESCE(NULLIF(submitterName,''), submitter) para fallback (datos sucios)
@@ -94,7 +93,7 @@ function injectSubmitterTokensLike(sql, personValue, opts = {}) {
 
   if (!s0 || !name) return { sql: s0, params: [] };
 
-  // ✅ fallback robusto (igual que utils/dimension.js)
+  // fallback robusto (igual que utils/dimension.js)
   const expr = "LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter)))";
 
   if (exact) {
@@ -114,7 +113,7 @@ function injectSubmitterTokensLike(sql, personValue, opts = {}) {
     return injectWhere(s0, cond, [name]);
   }
 
-  // ✅ AND directo (más estable que OR invertido)
+  // AND directo (más estable que OR invertido)
   const likeConds = tokens
     .map(() => `${expr} LIKE CONCAT('%', LOWER(TRIM(?)), '%')`)
     .join(" AND ");
@@ -133,7 +132,6 @@ function applyLockedFiltersParam({ baseSql, filters, personValueFinal, listDimen
     const lock = filters?.[d.key];
     if (!lock?.locked || !lock?.value) continue;
 
-    // ✅ idempotente: quita el filtro anterior de esa columna
     outSql = stripFiltersForColumn(outSql, d.column);
 
     const inj = injectColumnTokensLike(outSql, d.column, String(lock.value), {
@@ -147,7 +145,7 @@ function applyLockedFiltersParam({ baseSql, filters, personValueFinal, listDimen
   // person (submitter)
   if (personValueFinal) {
     // NOTE: stripFiltersForColumn NO aplica a person porque person no es una columna real,
-    // es una expresión. Si quieres, podemos añadir stripSubmitterFilters() en sqlText.
+    // es una expresión. 
     const inj = injectSubmitterTokensLike(outSql, personValueFinal, {
       exact: Boolean(filters?.person?.exact),
     });

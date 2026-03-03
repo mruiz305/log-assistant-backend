@@ -1,4 +1,4 @@
-// src/utils/kpiOnly.js
+
 function isKpiOnlyQuestion(msg = "") {
   const m = String(msg || "").toLowerCase();
 

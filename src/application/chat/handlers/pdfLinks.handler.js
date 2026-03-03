@@ -1,4 +1,4 @@
-// src/application/chat/handlers/pdfLinks.handler.js
+
 const sqlRepo = require("../../../repos/sql.repo");
 
 const {
@@ -194,7 +194,7 @@ async function handlePdfLinks({
     answer: out.answer,
     rowCount: 0,
     aiComment: "pdf_links_single_match",
-    userName: userName || null, // ✅ FIX (antes decía user:)
+    userName: userName || null, // FIX (antes decía user:)
     chart: null,
     pdfLinks: out.pdfLinks,
     pdfItems: out.pdfItems,

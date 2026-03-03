@@ -1,4 +1,4 @@
-// src/domain/dimensions/dimensionExtractor.js
+
 const { DIMENSIONS } = require("./dimensionRegistry");
 
 function cleanValue(v = "") {
@@ -16,7 +16,7 @@ function cleanValue(v = "") {
   return s;
 }
 
-// ✅ corta "extras" al final que NO son parte del nombre (periodos / conectores)
+// corta "extras" al final que NO son parte del nombre (periodos / conectores)
 function stripTrailingNoise(value = "", lang = "es") {
   let v = cleanValue(value);
 
@@ -39,7 +39,7 @@ function stripTrailingNoise(value = "", lang = "es") {
   return v;
 }
 
-// ✅ evita que "persona" sea un período (ej: "este mes", "últimos 7 días")
+// evita que "persona" sea un período (ej: "este mes", "últimos 7 días")
 function looksLikePeriod(value = "", lang = "es") {
   const v = String(value || "").toLowerCase().trim();
   if (!v) return true;
@@ -179,7 +179,7 @@ function extractDimensionAndValue(message = "", lang = "es") {
 
   // =========================================================
   // 2b) "how many <metric> <PERSON> has/did/got ..."
-  //     ✅ Cubre: "How many dropped Mariel has in 2025?"
+  //     Cubre: "How many dropped Mariel has in 2025?"
   // =========================================================
   const KPI_WORDS_EN =
     "(cases|logs|dropped|confirmed|problem|active|refer\\s*out|referout|converted|gross)";

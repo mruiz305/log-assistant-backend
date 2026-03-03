@@ -1,4 +1,4 @@
-// src/application/dashboard/handlers/statusChart.handler.js
+
 function buildStatusChart({ lang = "en", kpis }) {
   return {
     title: lang === "es" ? "Distribución de estatus" : "Status distribution",

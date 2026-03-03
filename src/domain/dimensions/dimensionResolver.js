@@ -1,4 +1,4 @@
-// src/utils/dimensionResolver.js
+
 const { DIMENSIONS } = require('./dimensionRegistry');
 
 // Detecta si el mensaje tiene forma "oficina de X" (no "oficina Miami")
@@ -12,6 +12,10 @@ function isOfficeOfPersonPhrase(message = '', lang = 'es') {
 async function resolveOfficeNameByPerson(sqlRepo, personName) {
   const p = String(personName || "").trim();
   if (!p) return null;
+
+  const exec = typeof sqlRepo?.query === "function"
+  ? async (sql, params) => sqlRepo.query(sql, params)          // sqlRepo => rows
+  : async (sql, params) => (await sqlRepo.query(sql, params))[0]; // pool => [rows]
 
   const rows = await sqlRepo.query(
     `
@@ -46,7 +50,7 @@ async function resolveDimension(sqlRepo, extracted, message, lang = 'es') {
   const def = DIMENSIONS[key];
   if (!def?.column) return null;
 
-  // ✅ Caso especial: "oficina de PERSONA" => resolver OfficeName real
+  // Caso especial: "oficina de PERSONA" => resolver OfficeName real
   if (key === 'office' && isOfficeOfPersonPhrase(message, lang)) {
     const officeName = await resolveOfficeNameByPerson(sqlRepo, rawValue);
     if (officeName) {

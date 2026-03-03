@@ -1,4 +1,4 @@
-// src/application/dashboard/handlers/monthKpis.handler.js
+
 const dashboardRepo = require("../../../repos/dashboard.repo");
 
 async function runMonthKpis() {

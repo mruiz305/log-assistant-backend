@@ -1,4 +1,4 @@
-// src/utils/errors.js
+
 function friendlyError(uiLang, reqId) {
   const base =
     uiLang === "es"

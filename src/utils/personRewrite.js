@@ -1,4 +1,4 @@
-// src/utils/personRewrite.js
+
 const { normalizeText } = require("../utils/text");
 
 /* =========================================================
@@ -80,7 +80,7 @@ function rewritePersonEqualsToLike(sql, message) {
     return `LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter))) LIKE CONCAT('%', LOWER(TRIM('${v}')), '%')`;
   };
 
-  // ✅ Si NO pidieron intake, y la IA filtró intakeSpecialist, lo convertimos a PERSONA
+  // Si NO pidieron intake, y la IA filtró intakeSpecialist, lo convertimos a PERSONA
   if (!isIntakeAsked) {
     s = s.replace(rxIntakeEq, (_m, name) => toPersonLike(name));
     s = s.replace(rxIntakeLike, (_m, name) => toPersonLike(name));
@@ -92,7 +92,7 @@ function rewritePersonEqualsToLike(sql, message) {
   s = s.replace(rxCoalesceSubmitterEq, (_m, name) => toPersonLike(name));
   s = s.replace(rxCoalesceSubmitterLike, (_m, name) => toPersonLike(name));
 
-  // ✅ Si NO pidieron cliente/caso, y la IA filtró name, lo tratamos como PERSONA (esto era tu regla original)
+  // Si NO pidieron cliente/caso, y la IA filtró name, lo tratamos como PERSONA (esto era tu regla original)
   if (!isClientAsked) {
     s = s.replace(rxNameEq, (_m, name) => toPersonLike(name));
     s = s.replace(rxNameLike, (_m, name) => toPersonLike(name));

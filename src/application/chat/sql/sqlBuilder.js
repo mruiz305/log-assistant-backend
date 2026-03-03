@@ -179,7 +179,7 @@ function extractTimeWindow(question, uiLang = 'en', opts = {}) {
   }
 
   // =========================
-  // ✅ FALLBACK OPCIONAL (NO asumir salvo que lo pidas)
+  // FALLBACK OPCIONAL (NO asumir salvo que lo pida)
   // =========================
   const fallbackDays = Number(opts.defaultWindowDays || 0);
   if (!Number.isNaN(fallbackDays) && fallbackDays > 0) {
@@ -620,11 +620,11 @@ async function buildSqlFromQuestion(question, uiLang = 'en', opts = {}) {
   const schemaDescription = buildSchemaDescription(lang);
   const dataContractJson = safeLoadDataContract();
 
-  // ✅ classifyIntent ahora devuelve { intent, needsSql }
+  // classifyIntent ahora devuelve { intent, needsSql }
   const intentInfo = classifyIntent(question);
   const intent = intentInfo?.intent || 'general';
 
-  // ✅ Golden template fallback (no OpenAI call)
+  //  Golden template fallback (no OpenAI call)
   const golden = tryGoldenTemplate(question, intent, lang, opts);
   if (golden) return golden;
 

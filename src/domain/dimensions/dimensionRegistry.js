@@ -1,4 +1,4 @@
-// src/utils/dimensionRegistry.js
+
 // Fuente única de verdad para dimensiones permitidas en dmLogReportDashboard.
 
 const DIMENSIONS = {

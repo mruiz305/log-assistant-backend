@@ -6,7 +6,7 @@ const pool = require("../infra/db.pool");
 const { generateExecutiveSummary } = require("../services/executiveSummary.service");
 
 /**
- * ✅ MES EN CURSO (MTD)
+ * MES EN CURSO (MTD)
  * - KPIs generales
  * - Top 10 reps: ORDER BY TTD (total leads) DESC, convertedValue DESC
  * - Top 10 attorneys: ORDER BY confirmed DESC
@@ -18,7 +18,7 @@ router.get("/summary/month", requireAuth, async (req, res) => {
     const lang = req.query.lang === "es" ? "es" : "en";
     const windowLabel = lang === "es" ? "Mes en curso" : "Month-to-date";
 
-    // ✅ KPIs del mes en curso (filtro por dateCameIn)
+    // KPIs del mes en curso (filtro por dateCameIn)
     const kpiSql = `
       SELECT
         COUNT(*) AS total,
@@ -72,7 +72,7 @@ router.get("/summary/month", requireAuth, async (req, res) => {
       ].filter((x) => x.value > 0),
     };
 
-    // ✅ TOP 10 reps (TTD + convertedValue)
+    // TOP 10 reps (TTD + convertedValue)
     const topRepsSql = `
       SELECT
         submitterName AS name,

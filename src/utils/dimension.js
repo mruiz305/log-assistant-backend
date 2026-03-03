@@ -1,7 +1,7 @@
-// src/utils/dimension.js
+
 // Centraliza inyección/strip de filtros LIKE para dimensiones (office/team/pod/region/director/attorney/intake/person)
 //
-// ✅ Objetivos
+// Objetivos
 // - Idempotente: si ya hay filtro para esa columna, lo reemplaza (no duplica)
 // - Token-friendly: "Maria, Chacon" => tokens AND (maria AND chacon)
 // - Compat: "__SUBMITTER__" para persona (submitterName con fallback submitter)
@@ -151,7 +151,7 @@ function injectSubmitterTokensLikeSmart(sql, personValue) {
   return `${head} WHERE (${cond}) ${tail}`.trim();
 }
 
-// ✅ compat con chat.route.js
+// compat con chat.route.js
 function injectLikeFilterSmart(sql, column, value) {
   const col = String(column || '').trim();
   if (col === '__SUBMITTER__') {

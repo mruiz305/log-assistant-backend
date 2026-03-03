@@ -1,11 +1,11 @@
-// src/services/ownerAnswer.service.js
+
 const openai = require("../../infra/openai.client");
 
 const { sanitizeRowsForSummary } = require("../summarySanitizer.service");
 const { classifyIntent } = require("../../domain/intent/intent")
 const { getAssistantProfile } = require("../assistantProfile");
 
-/** ✅ Detecta cuando el usuario quiere “análisis experto” */
+/** Detecta cuando el usuario quiere “análisis experto” */
 function wantsExpertAnalysis(q = "") {
   const s = String(q || "").toLowerCase();
   return /(analisis|análisis|insight|recomend|recomendaci|como experto|expert|interpret|qué significa|que significa|por qué|porque|causa|acciones|siguientes pasos|estrateg|oportunidad|riesgo)/i.test(
@@ -100,7 +100,7 @@ function isTooPoor(text = "") {
 }
 
 /**
- * ✅ Prompt builder
+ * Prompt builder
  */
 function buildPrompt({
   lang,
