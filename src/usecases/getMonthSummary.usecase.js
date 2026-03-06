@@ -7,10 +7,11 @@ async function getMonthSummaryUsecase({ lang, userName = null }) {
   const windowLabel = lang === "es" ? "Mes en curso" : "Month-to-date";
 
   // 1) KPIs y top lists -> Repo
-  const [kpis, topReps, topAttorneys] = await Promise.all([
+  const [kpis, topReps, topAttorneys, topStates] = await Promise.all([
     dashboardRepo.getMonthKpis(),
     dashboardRepo.getTopRepsMTD(10),
     dashboardRepo.getTopAttorneys(10),
+    dashboardRepo.getTopStates(10)
   ]);
 
   // 2) Chart -> Service puro (sin DB)
@@ -32,6 +33,7 @@ async function getMonthSummaryUsecase({ lang, userName = null }) {
     executiveSummary,
     topReps,
     topAttorneys,
+    topStates,
     updatedAt: new Date().toISOString(),
   };
 }

@@ -33,9 +33,10 @@ async function getMonthSummary({ lang = "en", userName = null }) {
     conversionValue: Number(k?.conversionValue || 0),
   };
 
-  const [topReps, topAttorneys] = await Promise.all([
+  const [topReps, topAttorneys, topStates] = await Promise.all([
     dashboardRepo.getTopRepsMTD(10),
     dashboardRepo.getTopAttorneysMTD(10),
+    dashboardRepo.getTopStatesMTD(10)
   ]);
 
   const chart = buildStatusChart(lang, kpis);
@@ -65,6 +66,7 @@ async function getMonthSummary({ lang = "en", userName = null }) {
     executiveSummary,
     topReps,
     topAttorneys,
+    topStates,
     updatedAt: new Date().toISOString(),
   };
 }

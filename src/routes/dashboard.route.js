@@ -88,6 +88,7 @@ router.get("/summary/month", requireAuth, async (req, res) => {
         AND dateCameIn <  DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
         AND submitterName IS NOT NULL
         AND submitterName <> ''
+        AND NOT FIND_IN_SET(TRIM(submitter),  (SELECT value FROM performance_data.tblGlobalsParams WHERE cod = 'dmLogExcludedUsers'))
       GROUP BY submitterName
       ORDER BY ttd DESC, convertedValue DESC, confirmed DESC
       LIMIT 10
@@ -111,6 +112,23 @@ router.get("/summary/month", requireAuth, async (req, res) => {
       LIMIT 10
     `;
 
+    // TOP 10 states (TTD + convertedValue)
+    const topStatesSql = `
+      SELECT
+        TRIM(accidentState) AS name,
+        SUM(CASE WHEN confirmed = 1 THEN 1 ELSE 0 END) AS confirmed,
+        COUNT(*) AS ttd,
+        ROUND(SUM(COALESCE(convertedValue, 0)), 2) AS convertedValue
+      FROM dmLogReportDashboard
+      WHERE dateCameIn >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+        AND dateCameIn <  DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
+        AND accidentState IS NOT NULL
+        AND TRIM(accidentState) <> ''
+      GROUP BY TRIM(accidentState)
+      ORDER BY ttd DESC, convertedValue DESC, confirmed DESC
+      LIMIT 10
+    `;
+
     let topReps = [];
     try {
       const [r] = await pool.query(topRepsSql);
@@ -127,6 +145,15 @@ router.get("/summary/month", requireAuth, async (req, res) => {
     } catch (e) {
       console.error("Top attorneys query failed:", e.message);
       topAttorneys = [];
+    }
+
+    let topStates = [];
+    try {
+      const [s] = await pool.query(topStatesSql);
+      topStates = s || [];
+    } catch (e) {
+      console.error("Top states query failed:", e.message);
+      topStates = [];
     }
 
     const executiveSummary = await generateExecutiveSummary({
@@ -154,6 +181,7 @@ router.get("/summary/month", requireAuth, async (req, res) => {
       executiveSummary,
       topReps,
       topAttorneys,
+      topStates,
       updatedAt: new Date().toISOString(),
     });
   } catch (err) {

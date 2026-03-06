@@ -16,6 +16,7 @@ async function getTopRepsMTD(limit = 10) {
     WHERE dateCameIn >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
       AND dateCameIn <  DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
       AND TRIM(submitterName) <> ''
+      AND NOT FIND_IN_SET(TRIM(submitter),  (SELECT value FROM performance_data.tblGlobalsParams WHERE cod = 'dmLogExcludedUsers'))
     GROUP BY TRIM(submitterName)
     ORDER BY ttd DESC, convertedValue DESC, confirmed DESC
     LIMIT ?
@@ -108,9 +109,30 @@ async function getTopAttorneysMTD(limit = 10) {
   return sqlRepo.query(sql, [Number(limit) || 10]);
 }
 
+async function getTopStatesMTD(limit = 10) {
+  const sql = `
+    SELECT
+      TRIM(accidentState) AS name,
+      SUM(CASE WHEN confirmed = 1 THEN 1 ELSE 0 END) AS confirmed,
+      COUNT(*) AS ttd,
+      ROUND(SUM(COALESCE(convertedValue, 0)), 2) AS convertedValue
+    FROM performance_data.dmLogReportDashboard
+    WHERE dateCameIn >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+      AND dateCameIn <  DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
+      AND TRIM(accidentState) <> ''
+      AND accidentState IS NOT NULL
+    GROUP BY TRIM(accidentState)
+    ORDER BY ttd DESC, convertedValue DESC, confirmed DESC
+    LIMIT ?
+  `.trim();
+
+  return sqlRepo.query(sql, [Number(limit) || 10]);
+}
+
 module.exports = {
   getTopRepsMTD,
   getMonthKpisBasic,
   getMonthKpisMTD,
   getTopAttorneysMTD,
+  getTopStatesMTD
 };
