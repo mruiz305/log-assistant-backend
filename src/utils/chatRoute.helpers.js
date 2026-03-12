@@ -186,15 +186,38 @@ function mentionsPersonExplicitly(msg = "", uiLang = "en") {
   const howManyMetricHasEs =
     /\bcu[aá]ntos?\s+(?:dropped|drop|confirmados?|activos?|problemas?|referidos?)\s+(.{2,60}?)(?=\s+\b(tiene|tienen)\b|\s+\b(en|durante|para)\b|[?.!,;:]|$)/i;
 
+  // ✅ "how is X doing" / "how is X performing" - entidad explícita que debe reemplazar la anterior
+  const howIsDoing = /\bhow\s+is\s+.+?\s+(?:doing|performing)\b/i;
+  const comoEsta = /\bc[oó]mo\s+est[aá]\s+.+?(?:\s+(?:haciendo|rindiendo|performando))?\b/i;
+
   // Si no quieres depender de uiLang, evaluamos todos siempre:
   return (
     howManyDidEn.test(m) ||
     howManyDidEs.test(m) ||
     howManyMetricHasEn.test(m) ||
-    howManyMetricHasEs.test(m)
+    howManyMetricHasEs.test(m) ||
+    howIsDoing.test(m) ||
+    comoEsta.test(m)
   );
 }
 
+/**
+ * Returns true if the previously resolved entity (lockedResolved) is compatible
+ * with the short name extracted from the current message (extracted).
+ * Used to avoid re-asking for entity selection when the user refers to the same
+ * person (e.g. "Tony" → "Tony Press Accidente Inc").
+ */
+function isResolvedEntityReusable(extracted, lockedResolved) {
+  const ex = String(extracted || "").trim().toLowerCase();
+  const locked = String(lockedResolved || "").trim();
+  if (!ex || !locked) return false;
+  const lockedLower = locked.toLowerCase();
+  if (lockedLower === ex) return true;
+  const firstToken = locked.split(/\s+/)[0]?.toLowerCase() || "";
+  if (firstToken === ex) return true;
+  if (lockedLower.startsWith(ex + " ") || lockedLower.startsWith(ex + "-")) return true;
+  return false;
+}
 
 module.exports = {
   makeReqId,
@@ -212,4 +235,5 @@ module.exports = {
   isFollowUpQuestion,
   injectPersonFromContext,
   mentionsPersonExplicitly,
+  isResolvedEntityReusable,
 };

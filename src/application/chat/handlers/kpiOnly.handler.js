@@ -5,18 +5,21 @@ const chatRepo = require("../../../repos/chat.repo");
 const { buildOwnerAnswer } = require("../../../services/answers/ownerAnswer.service");
 const { buildKpiPackSql } = require("../../../services/kpis/kpiPack.service");
 
-const { logSql, tokenizePersonName } = require("../../../utils/chatRoute.helpers");
+const { logSql, tokenizePersonName, isResolvedEntityReusable } = require("../../../utils/chatRoute.helpers");
 const { buildInsightCards } = require("../../../domain/ui/cardsAndChart.builder");
 const { buildSuggestions } = require("../../../domain/ui/suggestions.builder");
+const { noDataFoundResponse } = require("../../../utils/errors");
+const { buildActiveFiltersText } = require("../../../domain/ui/activeFilters");
 
 const { isKpiOnlyQuestion, isHowManyCasesQuestion } = require("../../../utils/kpiOnly");
 
 const { getContext, setContext, setPending } = require("../../../domain/context/conversationState");
 
-const { getDimension } = require("../../../domain/dimensions/dimensionRegistry");
+const { getDimension, listDimensions } = require("../../../domain/dimensions/dimensionRegistry");
 const { safeExtractExplicitPerson, fallbackNameFromText } = require("../../../utils/personDetect");
 
 const { extractDimensionAndValue } = require("../../../domain/dimensions/dimensionExtractor");
+const { applyLockedFiltersParam } = require("../pipeline/filterInjection");
 
 /* =========================================================
    Helpers (Context)
@@ -25,6 +28,10 @@ const { extractDimensionAndValue } = require("../../../domain/dimensions/dimensi
 function mergeFiltersFromContext(cid, localFilters) {
   if (!cid) return localFilters || {};
   const ctxNow = getContext(cid) || {};
+  // Con scope focus, NO hacer merge: los filtros ya vienen correctos (solo la dim del focus)
+  if (ctxNow.scopeMode === "focus" && ctxNow.focus?.value) {
+    return localFilters || {};
+  }
   return { ...(ctxNow.filters || {}), ...(localFilters || {}) };
 }
 
@@ -248,6 +255,11 @@ async function maybeDisambiguatePersonKpiOnly({
 
   const explicitPersonRaw = explicitFromText;
 
+  // Reuse previously resolved entity when same short name (e.g. "Tony" → "Tony Press Accidente Inc")
+  if (currentLocked && explicitPersonRaw && isResolvedEntityReusable(explicitPersonRaw, currentLocked)) {
+    return null;
+  }
+
   // Si el user escribió un nombre distinto, permitimos cambio (reseteamos lock local)
   if (currentLocked && explicitPersonRaw && currentLocked.toLowerCase() !== explicitPersonRaw.toLowerCase()) {
     filters.person = null;
@@ -270,10 +282,11 @@ async function maybeDisambiguatePersonKpiOnly({
     );
   }
 
+  const LIMIT = 500;
   const reps = await chatRepo.findPersonCandidates({
     rawPerson: explicitPersonRaw,
     parts,
-    limit: 8,
+    limit: LIMIT,
   });
 
   if (logEnabled) {
@@ -376,8 +389,40 @@ async function handleKpiOnly({
     }
   }
 
+  // Si venimos de pick de dimensión (attorney, office, etc.), no re-disambiguar (evita ciclo)
+  const justAppliedDimensionPick = Boolean(
+    forcedPick && pendingContext?.kind === "pick_dimension_candidate" && pendingContext?.dimKey
+  );
+
+  // Si venimos de pick de focus (scope Submitter → "Maria"): ya elegimos persona, no re-disambiguar (evita ciclo)
+  const justAppliedFocusCandidatePick = Boolean(
+    forcedPick && pendingContext?.kind === "pick_focus_candidate" && pendingContext?.focusType === "submitter"
+  );
+
+  // Si ya tenemos attorney/office/etc. locked (p. ej. tras aplicar pick), NO disambiguar persona
+  // (el texto "Kanner & Pintaluga handle" se detecta como persona pero es attorney ya resuelto)
+  const hasNonPersonDimLocked = Boolean(
+    (filters?.attorney?.locked && filters?.attorney?.value) ||
+    (filters?.office?.locked && filters?.office?.value) ||
+    (filters?.pod?.locked && filters?.pod?.value) ||
+    (filters?.team?.locked && filters?.team?.value) ||
+    (filters?.region?.locked && filters?.region?.value) ||
+    (filters?.director?.locked && filters?.director?.value) ||
+    (filters?.intake?.locked && filters?.intake?.value)
+  );
+
   // Forced KPI-only (how many...) cuando hay señal de persona
   if (hasAnyPersonSignal && isHowManyCasesQuestion(messageWithDefaultPeriod, uiLang)) {
+    const ctxNowForScope = cid ? getContext(cid) || {} : {};
+    const focusTypeNow = ctxNowForScope.scopeMode === "focus" && ctxNowForScope.focus?.type ? String(ctxNowForScope.focus.type).trim() : null;
+    const scopeIsNonPerson = focusTypeNow && focusTypeNow !== "submitter";
+
+    const skipDisamb = justAppliedPick || justAppliedDimensionPick || justAppliedFocusCandidatePick || hasNonPersonDimLocked || scopeIsNonPerson;
+    if (logEnabled) {
+      console.log(
+        `[${reqId}] [kpiOnly] maybeDisambiguatePerson skip=${skipDisamb} (justAppliedPick=${justAppliedPick} justAppliedDim=${justAppliedDimensionPick} justAppliedFocusPick=${justAppliedFocusCandidatePick} hasNonPersonLocked=${hasNonPersonDimLocked})`
+      );
+    }
     const pickOut = await maybeDisambiguatePersonKpiOnly({
       reqId,
       logEnabled,
@@ -386,21 +431,65 @@ async function handleKpiOnly({
       effectiveMessage,
       messageWithDefaultPeriod,
       filters,
-      skipThisTurn: justAppliedPick,
+      skipThisTurn: skipDisamb,
     });
-    if (pickOut) return pickOut;
+    if (pickOut) {
+      if (logEnabled) console.log(`[${reqId}] [kpiOnly] RE-ENTRÓ findPersonCandidates -> devuelve pick (evitar si skip=true)`);
+      return pickOut;
+    }
 
+    // buildKpiPackSql: pasar solo person; attorney/office/etc los inyecta applyLockedFiltersParam
+    const filtersForKpi = {};
+    if (filters?.person?.locked && filters.person.value) {
+      filtersForKpi.person = filters.person;
+    }
     const { sql: kpiSql, params: kpiParams, windowLabel } = buildKpiPackSql(messageWithDefaultPeriod, {
       lang: uiLang,
-      filters,
+      filters: filtersForKpi,
     });
 
-    if (logEnabled) logSql(reqId, "kpi_only(forced) kpiSql", kpiSql, kpiParams);
+    // Inyecta filtros locked (person/attorney/office...) como en otros handlers
+    const personValueFinal =
+      filters?.person?.locked && filters.person.value ? String(filters.person.value).trim() : null;
+    const { sql: finalSql, params } = applyLockedFiltersParam({
+      baseSql: kpiSql,
+      filters,
+      personValueFinal,
+      listDimensions: () => listDimensions(),
+      focusType: focusTypeNow,
+    });
 
-    const kpiRows = await sqlRepo.query(kpiSql, kpiParams);
+    if (logEnabled) logSql(reqId, "kpi_only(forced) kpiSql", finalSql, params);
+
+    const kpiRows = await sqlRepo.query(finalSql, params);
     const kpiPack = Array.isArray(kpiRows) && kpiRows[0] ? kpiRows[0] : null;
+    const grossCases = Number(kpiPack?.gross_cases ?? 0);
 
-    const answer = await buildOwnerAnswer(messageWithDefaultPeriod, kpiSql, [], {
+    if (grossCases === 0) {
+      const personVal = filters?.person?.locked && filters.person.value ? String(filters.person.value).trim() : null;
+      const hasRestrictiveFilters = ["attorney", "office", "pod", "team", "region", "director", "intake"].some(
+        (k) => filters?.[k]?.locked && filters[k].value
+      );
+      const activeFiltersText = buildActiveFiltersText(filters, windowLabel, uiLang);
+      const { answer, suggestions } = noDataFoundResponse(uiLang, {
+        personName: personVal || undefined,
+        period: windowLabel || undefined,
+        hasRestrictiveFilters,
+        activeFiltersText: activeFiltersText || undefined,
+      });
+      return {
+        ok: true,
+        answer,
+        cards: null,
+        rowCount: 0,
+        aiComment: "no_data",
+        userName,
+        chart: null,
+        suggestions,
+      };
+    }
+
+    const answer = await buildOwnerAnswer(messageWithDefaultPeriod, finalSql, [], {
       kpiPack,
       kpiWindow: windowLabel,
       lang: uiLang,
@@ -409,32 +498,75 @@ async function handleKpiOnly({
 
     const cards = buildInsightCards(uiLang, { windowLabel, kpiPack, mode: "kpi_only_forced_how_many" });
 
+    const droppedRate = Number(kpiPack?.dropped_rate ?? 0);
+    const highDropRate = droppedRate >= 40;
+    const suggestions = buildSuggestions(effectiveMessage, uiLang, { highDropRate });
+
     return {
       ok: true,
       answer,
       cards,
-      rowCount: 0,
+      rowCount: grossCases,
       aiComment: "kpi_only_forced_how_many",
       userName,
       chart: null,
-      suggestions: buildSuggestions(effectiveMessage, uiLang),
-      executedSql: debug ? kpiSql : undefined,
+      suggestions,
+      kpiWindow: windowLabel,
+      executedSql: debug ? finalSql : undefined,
     };
   }
 
   // KPI-only simple
   if (isKpiOnlyQuestion(messageWithDefaultPeriod)) {
+    const ctxNowForScope = cid ? getContext(cid) || {} : {};
+    const focusTypeNow = ctxNowForScope.scopeMode === "focus" && ctxNowForScope.focus?.type ? String(ctxNowForScope.focus.type).trim() : null;
+
     const { sql: kpiSql, params: kpiParams, windowLabel } = buildKpiPackSql(messageWithDefaultPeriod, {
       lang: uiLang,
       filters,
     });
 
-    if (logEnabled) logSql(reqId, "kpi_only kpiSql", kpiSql, kpiParams);
+    const personValueFinal =
+      filters?.person?.locked && filters.person.value ? String(filters.person.value).trim() : null;
+    const { sql: finalSql, params } = applyLockedFiltersParam({
+      baseSql: kpiSql,
+      filters,
+      personValueFinal,
+      listDimensions: () => listDimensions(),
+      focusType: focusTypeNow,
+    });
 
-    const kpiRows = await sqlRepo.query(kpiSql, kpiParams);
+    if (logEnabled) logSql(reqId, "kpi_only kpiSql", finalSql, params);
+
+    const kpiRows = await sqlRepo.query(finalSql, params);
     const kpiPack = Array.isArray(kpiRows) && kpiRows[0] ? kpiRows[0] : null;
+    const grossCases = Number(kpiPack?.gross_cases ?? 0);
 
-    const answer = await buildOwnerAnswer(messageWithDefaultPeriod, kpiSql, [], {
+    if (grossCases === 0) {
+      const personVal = filters?.person?.locked && filters.person.value ? String(filters.person.value).trim() : null;
+      const hasRestrictiveFilters = ["attorney", "office", "pod", "team", "region", "director", "intake"].some(
+        (k) => filters?.[k]?.locked && filters[k].value
+      );
+      const activeFiltersText = buildActiveFiltersText(filters, windowLabel, uiLang);
+      const { answer, suggestions } = noDataFoundResponse(uiLang, {
+        personName: personVal || undefined,
+        period: windowLabel || undefined,
+        hasRestrictiveFilters,
+        activeFiltersText: activeFiltersText || undefined,
+      });
+      return {
+        ok: true,
+        answer,
+        cards: null,
+        rowCount: 0,
+        aiComment: "no_data",
+        userName,
+        chart: null,
+        suggestions,
+      };
+    }
+
+    const answer = await buildOwnerAnswer(messageWithDefaultPeriod, finalSql, [], {
       kpiPack,
       kpiWindow: windowLabel,
       lang: uiLang,
@@ -443,16 +575,21 @@ async function handleKpiOnly({
 
     const cards = buildInsightCards(uiLang, { windowLabel, kpiPack, mode: "kpi_only" });
 
+    const droppedRate = Number(kpiPack?.dropped_rate ?? 0);
+    const highDropRate = droppedRate >= 40;
+    const suggestions = buildSuggestions(effectiveMessage, uiLang, { highDropRate });
+
     return {
       ok: true,
       answer,
       cards,
-      rowCount: 0,
+      rowCount: grossCases,
       aiComment: "kpi_only",
       userName,
       chart: null,
-      suggestions: buildSuggestions(effectiveMessage, uiLang),
-      executedSql: debug ? kpiSql : undefined,
+      suggestions,
+      kpiWindow: windowLabel,
+      executedSql: debug ? finalSql : undefined,
     };
   }
 

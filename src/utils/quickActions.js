@@ -7,9 +7,12 @@ function isTopQuickAction(msg = "") {
   const m = String(msg || "").trim();
 
   if (/^last\s+7\s+days$/i.test(m)) return true;
+  if (/^últimos?\s+7\s+d[ií]as$/i.test(m)) return true;
   if (/^this\s+month$/i.test(m)) return true;
+  if (/^este\s+mes$/i.test(m)) return true;
   if (/^top\s+reps$/i.test(m)) return true;
   if (/^see\s+dropped$/i.test(m)) return true;
+  if (/^ver\s+dropped$/i.test(m)) return true;
 
   return (
     /^confirmed\s*\(\s*month\s*\)$/i.test(m) ||
@@ -50,6 +53,44 @@ function getPersonFilterWhereAndParams(filters) {
   };
 }
 
+/** Mapeo dimensión -> columna dmLogReportDashboard */
+const DIM_COL_MAP = {
+  office: "OfficeName",
+  pod: "PODEName",
+  team: "TeamName",
+  region: "RegionName",
+  director: "DirectorName",
+  intake: "intakeSpecialist",
+  attorney: "attorney",
+};
+
+/**
+ * Construye WHERE + params para todos los filtros (person + office, pod, etc.).
+ * Usado por quick actions para respetar el filtro de la respuesta.
+ */
+function getAllFiltersWhereAndParams(filters) {
+  const parts = [];
+  const params = [];
+
+  const { whereSql: personWhere, params: personParams } = getPersonFilterWhereAndParams(filters);
+  if (personWhere) {
+    parts.push(personWhere.trim().replace(/^AND\s*/i, ""));
+    params.push(...personParams);
+  }
+
+  for (const [key, col] of Object.entries(DIM_COL_MAP)) {
+    const lock = filters?.[key];
+    if (!lock?.locked || !lock?.value) continue;
+    const v = String(lock.value || "").trim();
+    if (!v) continue;
+    parts.push(`LOWER(TRIM(${col})) LIKE CONCAT('%', LOWER(TRIM(?)), '%')`);
+    params.push(v);
+  }
+
+  const whereSql = parts.length ? " AND " + parts.join(" AND ") : "";
+  return { whereSql, params };
+}
+
 function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
   const m = String(actionMsg || "").trim();
   const filters = opts?.filters || {};
@@ -60,11 +101,11 @@ function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
   const last7Start = `DATE_SUB(CURDATE(), INTERVAL 6 DAY)`; // 7 días incluyendo hoy
   const tomorrow = `DATE_ADD(CURDATE(), INTERVAL 1 DAY)`;
 
-  // Inyección de persona (si existe lock en contexto)
-  const { whereSql: personWhere, params: personParams } = getPersonFilterWhereAndParams(filters);
+  // Inyección de todos los filtros (person, office, pod, etc.) del contexto
+  const { whereSql: filtersWhere, params: filtersParams } = getAllFiltersWhereAndParams(filters);
 
-  // UI: Last 7 days -> serie por día
-  if (/^last\s+7\s+days$/i.test(m)) {
+  // UI: Last 7 days / Últimos 7 días -> serie por día
+  if (/^last\s+7\s+days$/i.test(m) || /^últimos?\s+7\s+d[ií]as$/i.test(m)) {
     const sql = `
       SELECT
         DATE(dateCameIn) AS day,
@@ -74,21 +115,21 @@ function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
         ROUND(SUM(COALESCE(convertedValue,0)), 2) AS case_converted_value
       FROM dmLogReportDashboard
       WHERE dateCameIn >= ${last7Start} AND dateCameIn < ${tomorrow}
-      ${personWhere}
+      ${filtersWhere}
       GROUP BY DATE(dateCameIn)
       ORDER BY day ASC
     `.trim();
 
     return {
       sql,
-      params: [...personParams],
+      params: [...filtersParams],
       windowLabel: uiLang === "es" ? "Últimos 7 días" : "Last 7 days",
       mode: "series_last7",
     };
   }
 
-  // UI: This month -> serie por día
-  if (/^this\s+month$/i.test(m)) {
+  // UI: This month / Este mes -> serie por día
+  if (/^this\s+month$/i.test(m) || /^este\s+mes$/i.test(m)) {
     const sql = `
       SELECT
         DATE(dateCameIn) AS day,
@@ -98,21 +139,21 @@ function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
         ROUND(SUM(COALESCE(convertedValue,0)), 2) AS case_converted_value
       FROM dmLogReportDashboard
       WHERE dateCameIn >= ${monthStart} AND dateCameIn < ${monthEnd}
-      ${personWhere}
+      ${filtersWhere}
       GROUP BY DATE(dateCameIn)
       ORDER BY day ASC
     `.trim();
 
     return {
       sql,
-      params: [...personParams],
+      params: [...filtersParams],
       windowLabel: uiLang === "es" ? "Mes en curso" : "This month",
       mode: "series_month_daily",
     };
   }
 
-  // UI: See dropped -> últimos 3 meses por mes
-  if (/^see\s+dropped$/i.test(m)) {
+  // UI: See dropped / Ver dropped -> últimos 3 meses por mes
+  if (/^see\s+dropped$/i.test(m) || /^ver\s+dropped$/i.test(m)) {
     const sql = `
       SELECT
         YEAR(dateCameIn) AS y,
@@ -123,7 +164,7 @@ function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
       FROM dmLogReportDashboard
       WHERE dateCameIn >= DATE_SUB(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 2 MONTH)
         AND dateCameIn < DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
-      ${personWhere}
+      ${filtersWhere}
       GROUP BY YEAR(dateCameIn), MONTH(dateCameIn)
       ORDER BY y DESC, m DESC
       LIMIT 3
@@ -131,7 +172,7 @@ function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
 
     return {
       sql,
-      params: [...personParams],
+      params: [...filtersParams],
       windowLabel: uiLang === "es" ? "Últimos 3 meses" : "Last 3 months",
       mode: "dropped_3m",
     };
@@ -149,7 +190,7 @@ function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
       FROM dmLogReportDashboard
       WHERE dateCameIn >= ${monthStart} AND dateCameIn < ${monthEnd}
         AND TRIM(submitterName) <> ''
-      ${personWhere}
+      ${filtersWhere}
       GROUP BY TRIM(submitterName)
       ORDER BY gross_cases DESC, case_converted_value DESC
       LIMIT 10
@@ -157,7 +198,7 @@ function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
 
     return {
       sql,
-      params: [...personParams],
+      params: [...filtersParams],
       windowLabel: uiLang === "es" ? "Mes en curso (Top reps)" : "This month (Top reps)",
       mode: "top_reps_month",
     };
@@ -179,12 +220,12 @@ function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
         SUM(CASE WHEN Confirmed=0 AND UPPER(Status) LIKE '%REF%' THEN 1 ELSE 0 END) AS referout_cases
       FROM dmLogReportDashboard
       WHERE dateCameIn >= ${monthStart} AND dateCameIn < ${monthEnd}
-      ${personWhere}
+      ${filtersWhere}
     `.trim();
 
     return {
       sql,
-      params: [...personParams],
+      params: [...filtersParams],
       windowLabel: uiLang === "es" ? "Mes en curso" : "This month",
       mode: "kpi_pack",
     };
@@ -293,12 +334,12 @@ SUM(
 
 FROM dmLogReportDashboard
       WHERE dateCameIn >= DATE_SUB(CURDATE(), INTERVAL 7 DAY) AND dateCameIn < CURDATE()
-      ${personWhere}
+      ${filtersWhere}
     `.trim();
 
     return {
       sql,
-      params: [...personParams],
+      params: [...filtersParams],
       windowLabel: uiLang === "es" ? "Últimos 7 días" : "Last 7 days",
       mode: "kpi_pack",
     };
@@ -315,7 +356,7 @@ FROM dmLogReportDashboard
       FROM dmLogReportDashboard
       WHERE dateCameIn >= DATE_SUB(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 2 MONTH)
         AND dateCameIn < DATE_ADD(DATE_FORMAT(CURDATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
-      ${personWhere}
+      ${filtersWhere}
       GROUP BY YEAR(dateCameIn), MONTH(dateCameIn)
       ORDER BY y DESC, m DESC
       LIMIT 3
@@ -323,7 +364,7 @@ FROM dmLogReportDashboard
 
     return {
       sql,
-      params: [...personParams],
+      params: [...filtersParams],
       windowLabel: uiLang === "es" ? "Últimos 3 meses" : "Last 3 months",
       mode: "dropped_3m",
     };
@@ -339,7 +380,7 @@ FROM dmLogReportDashboard
       FROM dmLogReportDashboard
       WHERE YEAR(dateCameIn) = YEAR(CURDATE())
         AND TRIM(submitterName) <> ''
-      ${personWhere}
+      ${filtersWhere}
       GROUP BY TRIM(submitterName)
       HAVING gross_cases >= 10
       ORDER BY confirmed_rate DESC, confirmed_cases DESC, gross_cases DESC
@@ -348,7 +389,7 @@ FROM dmLogReportDashboard
 
     return {
       sql,
-      params: [...personParams],
+      params: [...filtersParams],
       windowLabel: uiLang === "es" ? "Año en curso" : "This year",
       mode: "best_confirmation_year",
     };
@@ -367,14 +408,14 @@ FROM dmLogReportDashboard
         ) AS dropped_rate
       FROM dmLogReportDashboard
       WHERE DATE(dateCameIn) = CURDATE()
-      ${personWhere}
+      ${filtersWhere}
       GROUP BY OfficeName
       ORDER BY dropped_cases DESC, gross_cases DESC
     `.trim();
 
     return {
       sql,
-      params: [...personParams],
+      params: [...filtersParams],
       windowLabel: uiLang === "es" ? "Hoy (por oficina)" : "Today (by office)",
       mode: "dropped_today_office",
     };

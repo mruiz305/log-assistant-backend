@@ -8,7 +8,7 @@ const FOCUS = {
   submitter: {
     key: "submitter",
     label: "Submitter",
-    table: "performance_data.nexus_person_submitter", // si no existe, luego lo resolvemos con DISTINCT en dmLogReportDashboard
+    table: "performance_data.nexus_g_user",
     searchCols: ["name", "email"],
     targetColumn: "submitterName",
     activeCol: "active",
@@ -60,7 +60,7 @@ const FOCUS = {
     label: "POD",
     table: "performance_data.nexus_person_pod",
     searchCols: ["name", "email"],
-    targetColumn: "PODName",
+    targetColumn: "PODEName",
     activeCol: "active",
     activeTruthy: [1, "1", true, "true", "Active"],
     canonicalFromRow: (r) => r.name,

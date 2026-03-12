@@ -1,8 +1,59 @@
+/**
+ * Detecta lenguaje analítico/evaluativo. Si la pregunta es de este tipo,
+ * NO debe ir a pdfLinks (usar flujo focus/performance en su lugar).
+ */
+function isAnalyticalQuestion(message = "") {
+  const m = String(message || "").toLowerCase();
+  const patterns = [
+    /\bbased\s+(?:off|on)\b/,
+    /\bwould\s+you\s+consider\b/,
+    /\bfit\s+employee\b/,
+    /\bworth\b/,
+    /\bjustify\b/,
+    /\bjustifies\b/,
+    /\bmake\s+\d+k\b/,
+    /\bsalary\b/,
+    /\bcompensation\b/,
+    /\bperformance\b/,
+    /\b(?:how\s+)?(?:well|good)\s+(?:did|does)\b/,
+    /\bcompare\s+(?:to|with)\b/,
+    /\b(?:his|her|their)\s+logs?\s+(?:for|of)\b/,
+    /\b(?:logs?|data)\s+for\s+\d{4}\b/,
+  ];
+  return patterns.some((rx) => rx.test(m));
+}
+
+/**
+ * Solo true cuando el usuario pide EXPLÍCITAMENTE un archivo/PDF.
+ * "logs" aislado (ej. "Tony's logs for 2025") NO cuenta.
+ */
+function isExplicitFileRequest(message = "") {
+  const m = String(message || "").toLowerCase();
+  // Patrones explícitos: pdf, file, link, roster, open pdf, send file, show log pdf, etc.
+  const explicit = [
+    /\bpdf\b/,
+    /\bfile\b/,
+    /\blink\b/,
+    /\benlace\b/,
+    /\burl\b/,
+    /\broster\b/,
+    /\bopen\s+(?:the\s+)?pdf\b/,
+    /\bsend\s+(?:me\s+)?(?:the\s+)?(?:pdf|file)\b/,
+    /\bshow\s+(?:me\s+)?(?:the\s+)?(?:log\s+)?pdf\b/,
+    /\blog\s*\/\s*pdf\b/,
+    /\b(?:give|get|show)\s+me\s+.*\b(?:pdf|roster|file)\b/,
+    /\b(?:dame|muestrame|mostrar|quiero)\s+.*\b(?:pdf|archivo|roster|expediente)\b/,
+  ];
+  return explicit.some((rx) => rx.test(m));
+}
 
 function wantsPdfLinks(message = "") {
-  return /(pdf|url|link|enlace|log\b|logs\b|log completo|full log|roster|reporte|report|details)/i.test(
-    String(message || "")
-  );
+  const m = String(message || "").trim();
+  if (!m) return false;
+  // Preguntas analíticas/evaluativas NUNCA van a pdfLinks
+  if (isAnalyticalQuestion(m)) return false;
+  // Solo si pide explícitamente archivo/PDF
+  return isExplicitFileRequest(m);
 }
 
 function normalizeText(s = "") {
@@ -169,7 +220,35 @@ async function findUserPdfCandidates(sqlRepo, text = "", limit = 8) {
   return Array.isArray(rows) ? rows : [];
 }
 
+/**
+ * Busca usuario en stg_g_users por nombre resuelto (ej. desde focus).
+ * Usado por logsLookup y rosterLookup.
+ */
+async function findUserByResolvedName(sqlRepo, resolvedName = "", limit = 5) {
+  const name = String(resolvedName || "").trim();
+  if (!name) return [];
+
+  const { tokenizePersonName } = require("../../utils/chatRoute.helpers");
+  const tokens = tokenizePersonName(name).filter((t) => t.length >= 2).slice(0, 4);
+  if (!tokens.length) return [];
+
+  const andConds = tokens.map(() => `(LOWER(TRIM(name)) LIKE ? OR LOWER(TRIM(nick)) LIKE ?)`).join(" AND ");
+  const params = tokens.flatMap((t) => [`%${t}%`, `%${t}%`]);
+
+  const sql = `
+    SELECT id, name, nick, email, logsIndividualFile, rosterIndividualFile
+    FROM stg_g_users
+    WHERE ${andConds}
+    ORDER BY name ASC
+    LIMIT ${Number(limit) || 5}
+  `.trim();
+
+  const rows = await sqlRepo.query(sql, params);
+  return Array.isArray(rows) ? rows : [];
+}
+
 module.exports = {
   wantsPdfLinks,
   findUserPdfCandidates,
+  findUserByResolvedName,
 };

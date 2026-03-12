@@ -12,17 +12,29 @@ function stripSubmitterCoalesceLike(sql) {
   if (!sql) return sql;
   let out = String(sql);
 
-  const rx = [
-    // AND (coalesce...) LIKE ...
-    /\s+AND\s+[^;]*?COALESCE\s*\(\s*NULLIF\s*\(\s*submitterName\s*,\s*''\s*\)\s*,\s*submitter\s*\)[^;]*?\bLIKE\b[^;]*?(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
-
-    // WHERE (coalesce...) LIKE ...
-    /\bWHERE\b\s+[^;]*?COALESCE\s*\(\s*NULLIF\s*\(\s*submitterName\s*,\s*''\s*\)\s*,\s*submitter\s*\)[^;]*?\bLIKE\b[^;]*?(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
+  // Patrones para COALESCE/submitter con LIKE
+  const rxLike = [
+    /\s+AND\s+(?:(?!\s+AND\s+)[^;])*?COALESCE\s*\(\s*NULLIF\s*\(\s*submitterName\s*,\s*''\s*\)\s*,\s*submitter\s*\)[^;]*?\bLIKE\b[^;]*?(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
+    /\bWHERE\b\s+(?:(?!\s+AND\s+)[^;])*?COALESCE\s*\(\s*NULLIF\s*\(\s*submitterName\s*,\s*''\s*\)\s*,\s*submitter\s*\)[^;]*?\bLIKE\b[^;]*?(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
   ];
-
-  for (const r of rx) {
+  for (const r of rxLike) {
     out = out.replace(r, (m) => (m.toUpperCase().startsWith("WHERE") ? "WHERE " : " "));
   }
+
+  // Patrones para TRIM(COALESCE(...)) = '...' o COALESCE(...) = '...' (IA usa = en vez de LIKE)
+  const rxEq = [
+    /\s+AND\s+(?:(?!\s+AND\s+)[^;])*?(?:TRIM\s*\(\s*)?COALESCE\s*\(\s*NULLIF\s*\(\s*submitterName\s*,\s*''\s*\)\s*,\s*submitter\s*\)[^;]*?=\s*'[^']*'(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
+    /\bWHERE\b\s+(?:(?!\s+AND\s+)[^;])*?(?:TRIM\s*\(\s*)?COALESCE\s*\(\s*NULLIF\s*\(\s*submitterName\s*,\s*''\s*\)\s*,\s*submitter\s*\)[^;]*?=\s*'[^']*'(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
+  ];
+  for (const r of rxEq) {
+    out = out.replace(r, (m) => (m.toUpperCase().startsWith("WHERE") ? "WHERE " : " "));
+  }
+
+  // Fallback: AND ... submitter/submitterName ... LIKE o =
+  out = out.replace(
+    /\s+AND\s+[^;]*?(?:submitterName|submitter)\b[^;]*?(?:\bLIKE\b|=)\s*'[^']*'(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
+    " "
+  );
 
   return out
     .replace(/\bWHERE\s+AND\b/gi, "WHERE ")
@@ -121,16 +133,102 @@ function injectSubmitterTokensLike(sql, personValue, opts = {}) {
   return injectWhere(s0, `(${likeConds})`, tokens);
 }
 
-function applyLockedFiltersParam({ baseSql, filters, personValueFinal, listDimensions }) {
+/** Columnas que la IA puede confundir (attorney vs office). Strip la incorrecta según el filtro activo. */
+const DIM_STRIP_CONFUSED = {
+  attorney: ["OfficeName"],
+  office: ["attorney"],
+};
+
+/** Dimensión -> columna en tabla. Para strip de scope anterior cuando cambia */
+const DIM_TO_COL = {
+  person: null,
+  office: "OfficeName",
+  pod: "PODEName",
+  team: "TeamName",
+  region: "RegionName",
+  director: "DirectorName",
+  intake: "intakeSpecialist",
+  attorney: "attorney",
+};
+
+function applyLockedFiltersParam({ baseSql, filters, personValueFinal, listDimensions, focusType }) {
   let outSql = String(baseSql || "");
   let params = [];
 
-  // dims (menos person)
+  if (process.env.LOG_SQL || process.env.DEBUG_PICK) {
+    const hasAttorney = !!(filters?.attorney?.locked && filters?.attorney?.value);
+    const hasOffice = !!(filters?.office?.locked && filters?.office?.value);
+    console.log(
+      `[filterInjection] ENTRADA focusType=${focusType || "(null)"} filters.attorney=${hasAttorney} filters.office=${hasOffice} personValueFinal=${!!personValueFinal}`
+    );
+    console.log(
+      `[filterInjection] baseSql: OfficeName=${outSql.includes("OfficeName")} submitter=${outSql.includes("submitter")} attorney=${outSql.includes("attorney")}`
+    );
+  }
+
+  const activeScopeDim =
+    focusType && DIM_TO_COL[focusType]
+      ? focusType
+      : (filters?.attorney?.locked && filters?.attorney?.value ? "attorney" : null) ||
+        (filters?.office?.locked && filters?.office?.value ? "office" : null) ||
+        (filters?.pod?.locked && filters?.pod?.value ? "pod" : null) ||
+        (filters?.team?.locked && filters?.team?.value ? "team" : null) ||
+        (filters?.region?.locked && filters?.region?.value ? "region" : null) ||
+        (filters?.director?.locked && filters?.director?.value ? "director" : null) ||
+        (filters?.intake?.locked && filters?.intake?.value ? "intake" : null);
+
+  // Fuente de verdad: focusType (ctx.focus) o activeScopeDim (filters). Strip la columna confundida.
+  // Cuando el usuario eligió ATTORNEY en el pick, NUNCA inyectar OfficeName ni submitter (aunque la IA los genere).
+  const scopeIsAttorney = focusType === "attorney" || (filters?.attorney?.locked && filters?.attorney?.value);
+  const scopeIsOffice = focusType === "office" || (filters?.office?.locked && filters?.office?.value);
+  const scopeIsOrg = scopeIsAttorney || scopeIsOffice ||
+    ["pod", "team", "region", "director", "intake"].some((k) => filters?.[k]?.locked && filters?.[k]?.value);
+
+  if (scopeIsAttorney) {
+    outSql = stripFiltersForColumn(outSql, "OfficeName");
+  }
+  if (scopeIsOffice) {
+    outSql = stripFiltersForColumn(outSql, "attorney");
+  }
+  // Scope orgánico (attorney/office/etc): quitar submitter que la IA pudo añadir (lo hacemos aquí para no depender de hasNonPersonScope)
+  if (scopeIsOrg) {
+    outSql = stripSubmitterCoalesceLike(outSql);
+    if (process.env.LOG_SQL || process.env.DEBUG_PICK) {
+      console.log(`[filterInjection] después scopeIsOrg strip: submitter=${outSql.includes("submitter")}`);
+    }
+  }
+
+  // Si hay scope activo: quitar columnas de OTROS scope que la IA pudo añadir (submitter ya se quitó arriba si scopeIsOrg)
+  if (activeScopeDim) {
+    for (const [dim, col] of Object.entries(DIM_TO_COL)) {
+      if (col && dim !== activeScopeDim) {
+        outSql = stripFiltersForColumn(outSql, col);
+      }
+    }
+  }
+
+  // Si el scope es org (attorney/office/pod/team/etc, no person), quitar filtro submitter que la IA pudo añadir por error
+  const SCOPE_NON_PERSON = new Set(["attorney", "office", "pod", "team", "region", "director", "intake"]);
+  const hasNonPersonScope =
+    (activeScopeDim && SCOPE_NON_PERSON.has(activeScopeDim)) ||
+    SCOPE_NON_PERSON.has(focusType) ||
+    ["attorney", "office", "pod", "team", "region", "director", "intake"].some(
+      (k) => filters?.[k]?.locked && filters?.[k]?.value
+    );
+  if (hasNonPersonScope) {
+    outSql = stripSubmitterCoalesceLike(outSql);
+  }
+
+  // dims (menos person). filters ya viene correcto de mergeFocusIntoFilters (solo el focus cuando hay scope)
   for (const d of listDimensions()) {
     if (d.key === "person") continue;
 
     const lock = filters?.[d.key];
     if (!lock?.locked || !lock?.value) continue;
+
+    // Al inyectar attorney: quitar OfficeName (confundido). Al inyectar office: quitar attorney.
+    if (d.key === "attorney") outSql = stripFiltersForColumn(outSql, "OfficeName");
+    if (d.key === "office") outSql = stripFiltersForColumn(outSql, "attorney");
 
     outSql = stripFiltersForColumn(outSql, d.column);
 
@@ -140,6 +238,10 @@ function applyLockedFiltersParam({ baseSql, filters, personValueFinal, listDimen
 
     outSql = inj.sql;
     params = params.concat(inj.params);
+  }
+
+  if (process.env.LOG_SQL || process.env.DEBUG_PICK) {
+    console.log(`[filterInjection] después inject dims: OfficeName=${outSql.includes("OfficeName")} submitter=${outSql.includes("submitter")} attorney=${outSql.includes("attorney")}`);
   }
 
   // person (submitter)
@@ -155,6 +257,12 @@ function applyLockedFiltersParam({ baseSql, filters, personValueFinal, listDimen
   }
 
   outSql = normalizeBrokenWhere(outSql);
+
+  if (process.env.LOG_SQL || process.env.DEBUG_PICK) {
+    console.log(
+      `[filterInjection] applyLockedFiltersParam DONE outSqlHasOfficeName=${outSql.includes("OfficeName")} outSqlHasAttorney=${outSql.includes("attorney")}`
+    );
+  }
 
   return { sql: outSql, params };
 }

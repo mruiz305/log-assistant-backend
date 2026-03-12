@@ -87,10 +87,12 @@ async function handlePdfLinks({
     };
   }
 
+  // Si scope focus está activo, NUNCA usar pdfLinks: prioridad al flujo focus
+  const ctxNow = cid ? getContext(cid) || {} : {};
+  if (ctxNow.scopeMode === "focus" && ctxNow.focus?.type) return null;
+
   // PDF LINKS FAST PATH
   if (!wantsPdfLinks(effectiveMessage)) return null;
-
-  const ctxNow = cid ? getContext(cid) || {} : {};
   const rememberedPdfUserId = ctxNow?.pdfUser?.id ? String(ctxNow.pdfUser.id) : null;
 
   const msgLooksLikePdfOnly =

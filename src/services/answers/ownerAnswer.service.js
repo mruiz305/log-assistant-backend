@@ -121,12 +121,13 @@ function buildPrompt({
   modeHint,
 }) {
   const isEs = lang === "es";
+  const first = userName ? String(userName).trim().split(/\s+/)[0] : "";
   const who = userName
     ? isEs
-      ? `Usuario: ${userName}.`
-      : `User: ${userName}.`
+      ? `Usuario: ${userName}. Trata al usuario por su nombre (p. ej. "${first}") de forma natural cuando sea apropiado.`
+      : `User: ${userName}. Address the user by their first name (e.g. "${first}") naturally when appropriate.`
     : "";
-  const hello = userName ? `${assistantGreeting}, ${userName}.` : `${assistantGreeting}.`;
+  const hello = userName ? `${assistantGreeting}, ${first || userName}.` : `${assistantGreeting}.`;
 
   const hasPeriod = Boolean(kpiWindow && String(kpiWindow).trim());
   const periodLine = hasPeriod ? (isEs ? `Periodo: ${kpiWindow}` : `Period: ${kpiWindow}`) : "";
@@ -307,6 +308,24 @@ PERFORMANCE mode:
 - Do not invent metrics not present in the data.
 `.trim();
 
+  const executiveStructure = isEs
+    ? `
+Estructura ejecutiva (lógica interna, no títulos visibles obligatorios):
+1. Conclusión: postura clara en 1-2 líneas.
+2. Por qué: razones principales.
+3. Evidencia: números, tasas, comparativas.
+4. Siguiente paso: acción recomendada concreta.
+- Respuestas concisas, con postura y evidencia. Evita texto difuso o largo.
+`.trim()
+    : `
+Executive structure (internal logic, visible titles optional):
+1. Conclusion: clear stance in 1-2 lines.
+2. Why: main reasons.
+3. Evidence: numbers, rates, comparisons.
+4. Next step: concrete recommended action.
+- Concise responses, with stance and evidence. Avoid diffuse or lengthy text.
+`.trim();
+
   const example = isEs
     ? `
 Ejemplo de salida (solo para guiar estilo):
@@ -347,6 +366,7 @@ ${header}
 Modo: análisis experto (directo, humano, sin jerga técnica).
 
 FORMATO OBLIGATORIO:
+${executiveStructure}
 ${firstLineRule}
 - Devuelve SIEMPRE 7–9 bullets.
 - Cada bullet debe empezar con "- " (guion + espacio).
@@ -381,6 +401,7 @@ ${internalTiny}
 ${header}
 
 FORMATO OBLIGATORIO:
+${executiveStructure}
 ${firstLineRule}
 - Devuelve SIEMPRE 4–6 bullets.
 - Cada bullet debe empezar con "- " (guion + espacio).

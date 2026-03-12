@@ -2,6 +2,22 @@
 function isKpiOnlyQuestion(msg = "") {
   const m = String(msg || "").toLowerCase();
 
+  // Entity-vs-average / peer-comparison questions should NOT go through plain KPI-only.
+  const hasComparisonSignal =
+    /\bcompare(?:d)?\s+to\b/.test(m) ||
+    /\bcompare(?:d)?\s+with\b/.test(m) ||
+    /\bversus\b/.test(m) ||
+    /\bvs\b/.test(m) ||
+    /\bpeer(?:s)?\b/.test(m) ||
+    /\baverage\s+submitter\b/.test(m) ||
+    /\bpeer\s+average\b/.test(m) ||
+    /\babove\s+average\b/.test(m) ||
+    /\bbelow\s+average\b/.test(m);
+
+  if (hasComparisonSignal) {
+    return false;
+  }
+
   const asksKpi =
     /(confirmed|confirmados|tasa|rate|dropped|problem|leakage|active|referout|valor\s+de\s+conversi[oó]n|conversion\s+value|kpi)/i.test(
       m

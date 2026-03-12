@@ -23,14 +23,23 @@ function stripFiltersForColumn(sql, column) {
   if (!col) return sql;
 
   let out = String(sql);
+  // 1) Patrón principal: WHERE/AND + columna + LIKE o =
   const re = new RegExp(
-    String.raw`(\s+\bWHERE\b|\s+\bAND\b)\s+[^;]*?\b(?:LOWER\s*\(\s*TRIM\s*\(\s*)?${col}\b[^;]*?\b(LIKE|=)\b[^;]*?(?=\s+\bAND\b|\s+\bGROUP\s+BY\b|\s+\bORDER\s+BY\b|\s+\bLIMIT\b|$)`,
+    String.raw`(\s+\bWHERE\b|\s+\bAND\b)\s+[^;]*?\b(?:LOWER\s*\(\s*TRIM\s*\(\s*)?${col}\b[^;]*?(\bLIKE\b|=)[^;]*?(?=\s+\bAND\b|\s+\bGROUP\s+BY\b|\s+\bORDER\s+BY\b|\s+\bLIMIT\b|;|$)`,
     "gis"
   );
-
   out = out.replace(re, " ");
+
+  // 2) Fallback: columna = '...' o = "..." (IA suele generar OfficeName = 'X' así)
+  const reSimple = new RegExp(
+    String.raw`\s+(?:AND|WHERE)\s+${col}\s*=\s*(?:'[^']*'|"[^"]*")(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)`,
+    "gis"
+  );
+  out = out.replace(reSimple, " ");
+
   out = out
     .replace(/\bWHERE\s+AND\b/gi, "WHERE")
+    .replace(/\bFROM\s+([a-zA-Z0-9_.`]+)\s+AND\b/gi, "FROM $1 WHERE")
     .replace(/\bWHERE\s+(GROUP\s+BY|ORDER\s+BY|LIMIT)\b/gi, "$1")
     .replace(/\bWHERE\s*$/i, "")
     .replace(/\s+/g, " ")

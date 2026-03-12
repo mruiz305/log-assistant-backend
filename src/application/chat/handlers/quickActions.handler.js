@@ -2,11 +2,12 @@
 const sqlRepo = require("../../../repos/sql.repo");
 
 const { getUserName } = require("../../../domain/context/userProfile");
-const { getContext, setContext } = require("../../../domain/context/conversationState");
+const { getContext } = require("../../../domain/context/conversationState");
 
-const { listDimensions } = require("../../../domain/dimensions/dimensionRegistry");
 const { logSql } = require("../../../utils/chatRoute.helpers");
-const { friendlyError } = require("../../../utils/errors");
+const { friendlyError, noDataFoundResponse } = require("../../../utils/errors");
+const { buildActiveFiltersText } = require("../../../domain/ui/activeFilters");
+const { cloneFilters, mergeFocusIntoFilters } = require("../../../utils/chatContextLocks");
 
 const { buildOwnerAnswer } = require("../../../services/answers/ownerAnswer.service");
 const { buildMiniChart } = require("../../../utils/miniChart");
@@ -25,21 +26,6 @@ const {
   normalizeQuickActionMessage,
 } = require("../../../utils/quickActions");
 
-function clearContextForQuickAction(cid) {
-  if (!cid) return;
-  const ctxNow = getContext(cid) || {};
-  const next = { ...ctxNow };
-  const f = { ...(next.filters || {}) };
-
-  for (const d of listDimensions()) f[d.key] = null;
-
-  next.filters = f;
-  next.lastPerson = null;
-  next.pdfUser = null;
-
-  setContext(cid, next);
-}
-
 async function handleQuickActions({
   reqId,
   logEnabled,
@@ -53,10 +39,15 @@ async function handleQuickActions({
 
   if (!topQuickAction) return null;
 
-  // Quick Action => limpiar contexto para que sea global
-  if (cid) clearContextForQuickAction(cid);
+  // Usar filtros del contexto (respuesta previa o scope) para que los quicks respeten el filtro
+  let filters = {};
+  if (cid) {
+    const ctx = getContext(cid) || {};
+    filters = cloneFilters(ctx);
+    filters = mergeFocusIntoFilters(filters, ctx);
+  }
 
-  const qa = buildTopQuickActionSql(msg, uiLang);
+  const qa = buildTopQuickActionSql(msg, uiLang, { filters });
 
   if (!qa) {
     return {
@@ -98,6 +89,28 @@ async function handleQuickActions({
       chart: null,
       suggestions: buildSuggestions("", uiLang),
       ...(debug ? { debugDetails: String(e?.message || e) } : {}),
+    };
+  }
+
+  if (rowsQA.length === 0) {
+    const hasRestrictiveFilters = ["attorney", "office", "pod", "team", "region", "director", "intake"].some(
+      (k) => filters?.[k]?.locked && filters[k].value
+    );
+    const activeFiltersText = buildActiveFiltersText(filters, qa?.windowLabel, uiLang);
+    const { answer, suggestions } = noDataFoundResponse(uiLang, {
+      period: qa?.windowLabel || undefined,
+      hasRestrictiveFilters,
+      activeFiltersText: activeFiltersText || undefined,
+    });
+    return {
+      ok: true,
+      answer,
+      cards: null,
+      rowCount: 0,
+      aiComment: "no_data",
+      userName: cid ? getUserName(cid) || null : null,
+      chart: null,
+      suggestions,
     };
   }
 
@@ -159,6 +172,7 @@ async function handleQuickActions({
     userName: cid ? getUserName(cid) || null : null,
     chart: chart || null,
     suggestions: buildSuggestions("", uiLang),
+    kpiWindow: qa.windowLabel,
     executedSql: debug ? qa.sql : undefined,
     ...(debug
       ? {

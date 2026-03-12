@@ -41,10 +41,16 @@ function openScopeWizard(cid, uiLang = "en") {
 async function applyPickedScopeType({ cid, pickedValue, uiLang }) {
   const type = String(pickedValue || "").trim().toLowerCase();
 
-  // ✅ 1) Guardar tipo elegido inmediatamente
+  const SCOPE_DIM_KEYS = ["person", "office", "pod", "team", "region", "director", "intake", "attorney"];
+  const ctxNow = getContext(cid) || {};
+  const nextFilters = { ...(ctxNow.filters || {}) };
+  SCOPE_DIM_KEYS.forEach((k) => { nextFilters[k] = null; });
+
+  // ✅ 1) Guardar tipo elegido y limpiar scope anterior (evita office cuando eligió attorney)
   setContext(cid, {
     scopeMode: type === "general" ? "general" : "focus",
     focus: type === "general" ? null : { type, value: null, label: null },
+    filters: nextFilters,
   });
 
   // ✅ 2) Si es general, no pedir nada más
@@ -72,15 +78,35 @@ async function applyPickedScopeType({ cid, pickedValue, uiLang }) {
 }
 
 
-async function handleAwaitScopeValue({ cid, focusType, message, uiLang }) {
-  // aquí el mensaje del usuario ES el texto a buscar (Miami, Alpha, etc.)
-  const q = String(message || "").trim();
-  if (!q) return { ok: true, answer: uiLang === "es" ? "Dime el valor a buscar." : "Tell me what to search for." };
-
-  const r = await resolveAndSetFocus({ cid, type: focusType, query: q, limit: 10 });
-
-  // resolveAndSetFocus ya crea pending pick si hay múltiples
-  return { ok: true, answer: r.message };
+/** Indica si el mensaje parece una pregunta (no un valor de scope) */
+function looksLikeQuestion(msg = "") {
+  const m = String(msg || "").toLowerCase();
+  return (
+    /\b(how\s+many|what|show\s+me|give\s+me|list|dame|mu[eé]strame|cu[aá]ntos?|cu[aá]ntas?|cu[aá]l|which)\b/i.test(m) ||
+    (m.length > 50 && /\b(cases|logs|confirmed|dropped|handle|handled)\b/i.test(m))
+  );
 }
 
-module.exports = { openScopeWizard, applyPickedScopeType, handleAwaitScopeValue };
+async function handleAwaitScopeValue({ cid, focusType, message, uiLang, scopeValueOverride }) {
+  // scopeValueOverride: cuando el mensaje es una pregunta, el orchestrator extrae el valor
+  const q = String((scopeValueOverride ?? message) || "").trim();
+  if (!q) return { ok: true, answer: uiLang === "es" ? "Dime el valor a buscar." : "Tell me what to search for." };
+
+  const r = await resolveAndSetFocus({
+    cid,
+    type: focusType,
+    query: q,
+    limit: 500,
+    originalMessage: String(message || "").trim() || null,
+    uiLang,
+  });
+
+  // 0 matches: mostrar error (no usar valor literal en SQL)
+  if (r.ok === false && r.reason) {
+    return { ok: true, answer: r.reason, applied: false };
+  }
+  // resolveAndSetFocus ya crea pending pick si hay múltiples
+  return { ok: true, answer: r.message, applied: r.applied === true };
+}
+
+module.exports = { openScopeWizard, applyPickedScopeType, handleAwaitScopeValue, looksLikeQuestion };

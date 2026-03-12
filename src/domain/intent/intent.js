@@ -71,6 +71,8 @@ function buildHelpAnswer(lang = 'en', opts = {}) {
     const greet = hasName ? `Hola ${userName}. ` : '';
     return `${greet}Puedo ayudarte con métricas y análisis de casos (confirmed/dropped), rendimiento por submitter/oficina, tendencias por semana/mes/año y links de logs/PDF.
 
+Puedes elegir un filtro (scope) arriba para enfocar las consultas por oficina, equipo, director, submitter u otra dimensión.
+
 Ejemplos:
 • "Confirmados este mes"
 • "Dropped últimos 7 días por oficina"
@@ -83,6 +85,8 @@ Tip: si quieres, dime tu nombre: "Me llamo Ana".`;
 
   const greet = hasName ? `Hi ${userName}. ` : '';
   return `${greet}I can help with case analytics (confirmed/dropped), performance by submitter/office, trends by week/month/year, and log/PDF links.
+
+You can select a scope filter above to focus queries by office, team, director, submitter, or other dimensions.
 
 Examples:
 • "Confirmed this month"

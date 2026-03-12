@@ -576,14 +576,44 @@ Must return EXACT JSON:
 }
 
 
-function buildUserPrompt(question, intent, uiLang = 'en') {
+/** Construye instrucción para excluir filtros que ya vienen del contexto (usuario eligió pick) */
+function buildExcludedFiltersInstruction(lockedFilters, uiLang = 'en') {
+  if (!lockedFilters || typeof lockedFilters !== 'object') return null;
+  const excluded = [];
+  if (lockedFilters.attorney?.locked) {
+    excluded.push('attorney', 'OfficeName');
+  }
+  if (lockedFilters.office?.locked) {
+    excluded.push('OfficeName', 'attorney');
+  }
+  if (lockedFilters.person?.locked) {
+    excluded.push('submitterName', 'submitter', 'COALESCE(NULLIF(submitterName');
+  }
+  for (const k of ['pod', 'team', 'region', 'director', 'intake']) {
+    if (lockedFilters[k]?.locked) {
+      const cols = { pod: 'PODEName', team: 'TeamName', region: 'RegionName', director: 'DirectorName', intake: 'intakeSpecialist' };
+      excluded.push(cols[k]);
+    }
+  }
+  const unique = [...new Set(excluded)];
+  if (unique.length === 0) return null;
+  if (uiLang === 'es') {
+    return `IMPORTANTE: NO añadas filtros WHERE para estas columnas/expresiones (ya vienen del contexto del usuario): ${unique.join(', ')}. Genera el SQL SIN esas condiciones.`;
+  }
+  return `IMPORTANT: Do NOT add WHERE conditions for these columns/expressions (they are already applied from user context): ${unique.join(', ')}. Generate SQL WITHOUT those conditions.`;
+}
+
+function buildUserPrompt(question, intent, uiLang = 'en', opts = {}) {
+  const excludedInstruction = buildExcludedFiltersInstruction(opts.lockedFilters, uiLang);
+  const excludedBlock = excludedInstruction ? `\n\n${excludedInstruction}\n` : '';
+
   if (uiLang === 'es') {
     return `
 Pregunta del usuario:
 "${question}"
 
 INTENT_DETECTADO: ${intent}
-
+${excludedBlock}
 REGLAS DE INTENT:
 - intent=cnv => enfócate en Confirmed (confirmados) y/o convertedValue (crédito) según la pregunta.
 - intent=health => enfócate en Status (Problem/Dropped). No uses Confirmed salvo que lo pidan.
@@ -601,7 +631,7 @@ User question:
 "${question}"
 
 DETECTED_INTENT: ${intent}
-
+${excludedBlock}
 INTENT RULES:
 - intent=cnv => focus on Confirmed (confirmed cases) and/or convertedValue (credit) as requested.
 - intent=health => focus on Status (Problem/Dropped). Do not use Confirmed unless requested.
@@ -628,7 +658,7 @@ async function buildSqlFromQuestion(question, uiLang = 'en', opts = {}) {
   const golden = tryGoldenTemplate(question, intent, lang, opts);
   if (golden) return golden;
 
-  const prompt = buildUserPrompt(question, intent, lang);
+  const prompt = buildUserPrompt(question, intent, lang, opts);
   const profile = getAssistantProfile(lang);
 
   const inputMessages = [

@@ -1,33 +1,26 @@
+const { findFocusCandidates } = require("./focus.repo");
 
-const sqlRepo = require("./sql.repo");
+/**
+ * Busca candidatos de persona/submitter en nexus_g_user.
+ * Usa la tabla performance_data.nexus_g_user como fuente de verdad.
+ */
+const PERSON_PICK_LIMIT = 500;
 
-async function findPersonCandidates({ rawPerson, parts = [], limit = 8 }) {
-  const safeLimit = Number(limit) || 8;
+async function findPersonCandidates({ rawPerson, parts = [], limit = PERSON_PICK_LIMIT }) {
+  const safeLimit = Number(limit) || PERSON_PICK_LIMIT;
+  const query = String(rawPerson || "").trim();
+  if (!query) return [];
 
-  // Si ya te pasan parts, úsalo. Si no, que el caller los arme.
-  if (!Array.isArray(parts) || !parts.length) return [];
+  const rows = await findFocusCandidates({
+    type: "submitter",
+    query,
+    limit: safeLimit,
+  });
 
-  const expr = "LOWER(TRIM(submitterName))";
-  const likeConds = parts
-    .slice(0, 6)
-    .map(() => `${expr} LIKE CONCAT('%', LOWER(TRIM(?)), '%')`)
-    .join(" AND ");
-
-  const sql = `
-    SELECT
-      TRIM(submitterName) AS submitter,
-      COUNT(*) AS cnt
-    FROM dmLogReportDashboard
-    WHERE
-      dateCameIn >= DATE_SUB(CURDATE(), INTERVAL 180 DAY)
-      AND TRIM(submitterName) <> ''
-      AND (${likeConds})
-    GROUP BY TRIM(submitterName)
-    ORDER BY cnt DESC, submitter ASC
-    LIMIT ${safeLimit}
-  `.trim();
-
-  return await sqlRepo.query(sql, parts.slice(0, 6));
+  return rows.map((r) => ({
+    submitter: r.name ? String(r.name).trim() : "",
+    cnt: null,
+  })).filter((c) => c.submitter);
 }
 
 module.exports = {

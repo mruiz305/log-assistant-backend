@@ -252,13 +252,15 @@ function buildTokenLikeWhere(column, rawValue, paramsOut) {
 function buildKpiPackSql(message, opts = {}) {
   const lang = opts.lang === "es" ? "es" : "en";
   
-  // 1) ventana
- // 1) Extraer ventana desde el mensaje
-  let w = extractTimeWindow(message, lang, opts.defaultWindowDays ?? null);
+  // 1) Extraer ventana desde el mensaje
+  const w = extractTimeWindow(message, lang, opts.defaultWindowDays ?? null);
 
-  // 2) Si NO hubo match, forzar ESTE MES
-  if (!w?.matched) {
-    w = defaultThisMonthWindow(lang);
+  // 2) NO aplicar fallback de "este mes" aquí.
+  //    La regla es: si no se detecta periodo explícito, el caller decide si usa defaultThisMonthWindow.
+  if (process.env.LOG_SQL || process.env.DEBUG_PICK) {
+    console.log(
+      `[period] buildKpiPackSql explicitPeriodDetected=${Boolean(w?.matched)} label="${w?.label || ""}"`
+    );
   }
    // quitar WHERE para poder concatenar filtros
   const timeClause = String(w.where || '').trim().toUpperCase().startsWith('WHERE ')
@@ -420,4 +422,62 @@ ${whereClause};
   };
 }
 
-module.exports = { buildKpiPackSql, extractTimeWindow };
+/**
+ * Peer comparison: métricas por submitter para el mismo período.
+ * Excluye filtro person para obtener todos los peers.
+ * Usado por logs performance review para ranking.
+ */
+function buildPeerComparisonSql(message, opts = {}) {
+  const lang = opts.lang === "es" ? "es" : "en";
+  let w = extractTimeWindow(message, lang, opts.defaultWindowDays ?? null);
+  if (!w?.matched) w = defaultThisMonthWindow(lang);
+
+  const timeClause = String(w.where || "").trim().toUpperCase().startsWith("WHERE ")
+    ? String(w.where || "").trim().slice(6).trim()
+    : String(w.where || "").trim();
+
+  const whereParts = [];
+  const params = [];
+  if (timeClause) whereParts.push(timeClause);
+
+  const filters = opts.filters || {};
+  const dimMap = {
+    office: { col: "OfficeName" },
+    team: { col: "TeamName" },
+    pod: { col: "PODEName" },
+    region: { col: "RegionName" },
+    director: { col: "DirectorName" },
+    attorney: { col: "attorney" },
+    intake: { col: "intakeSpecialist" },
+  };
+
+  for (const key of ["office", "team", "pod", "region", "director", "attorney", "intake"]) {
+    const f = filters?.[key];
+    if (!f?.value) continue;
+    const v = String(f.value || "").trim();
+    if (!v) continue;
+    const def = dimMap[key];
+    if (!def?.col) continue;
+    whereParts.push(`LOWER(TRIM(${def.col})) LIKE CONCAT('%', LOWER(TRIM(?)), '%')`);
+    params.push(v);
+  }
+
+  const whereClause = whereParts.length ? `WHERE ${whereParts.join(" AND ")}` : "";
+
+  const sql = `
+SELECT
+  TRIM(COALESCE(NULLIF(submitterName,''), submitter)) AS submitter_key,
+  COUNT(*) AS gross_cases,
+  SUM(CASE WHEN Confirmed=1 THEN 1 ELSE 0 END) AS confirmed_cases,
+  ROUND(100 * SUM(CASE WHEN Confirmed=1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS confirmed_rate,
+  ROUND(SUM(COALESCE(convertedValue,0)), 2) AS total_converted_value,
+  ROUND(100 * SUM(CASE WHEN UPPER(Status) LIKE '%DROP%' THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS dropped_rate
+FROM performance_data.dmLogReportDashboard
+${whereClause}
+GROUP BY TRIM(COALESCE(NULLIF(submitterName,''), submitter))
+`.trim();
+
+  return { sql, params, windowLabel: w.label };
+}
+
+module.exports = { buildKpiPackSql, buildPeerComparisonSql, extractTimeWindow, defaultThisMonthWindow };

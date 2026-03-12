@@ -162,15 +162,50 @@ function extractPersonNameFromMessage(message = "") {
   let m = raw.match(/["“”'‘’]([^"“”'‘’]{2,50})["“”'‘’]/);
   if (m && m[1]) return String(m[1]).trim();
 
-  // 2) patrones "de/para/of/for/submitter"
-  m = q.match(/\b(de|para|of|for|submitter|submittername)\s+([a-z0-9.\-_ ]{2,50})\b/);
-  if (m && m[2]) {
-    const idx = q.indexOf(m[2]);
-    if (idx >= 0) return raw.slice(idx, idx + m[2].length).trim();
-    return m[2].trim();
+  // 2a) "X's performance" / "summarize X's performance" - captura nombre inmediatamente antes de 's
+  m = raw.match(/\b([A-Za-z][A-Za-z0-9\-]+)\s*['\u2019]?s\s+performance\b/i);
+  if (m && m[1]) {
+    const v = m[1].trim();
+    if (v.length >= 2 && !/^(summarize|describe|show|can|this|last|that)$/i.test(v)) return v;
   }
 
-  // 3) primera palabra tipo "Tony este mes"
+  // 2b) patrones "de/para/of/for/submitter" - excluir periodos (this month, last year, etc.)
+  m = q.match(/\b(de|para|of|for|submitter|submittername)\s+([a-z0-9.\-_ ]{2,50})\b/);
+  if (m && m[2]) {
+    const v = m[2].trim().toLowerCase();
+    const isTimePhrase = /^(this|last|that|the)\s+(month|year|week|quarter|30\s*days?|7\s*days?)/i.test(v) || /^(month|year|week|today|yesterday)$/i.test(v);
+    if (!isTimePhrase) {
+      const idx = q.indexOf(m[2]);
+      if (idx >= 0) return raw.slice(idx, idx + m[2].length).trim();
+      return m[2].trim();
+    }
+  }
+
+  // 3) "how is X doing" / "how is X performing" / "how has X been performing" - X is the person
+  m = raw.match(/\bhow\s+is\s+(.+?)\s+(?:doing|performing)\b/i);
+  if (m && m[1]) {
+    const v = m[1].trim().replace(/\s+(this|last|that)\s+(month|year|week)\b.*$/i, "").trim();
+    if (v.length >= 2) return v;
+  }
+  m = raw.match(/\bhow\s+has\s+(.+?)\s+been\s+(?:doing|performing)\b/i);
+  if (m && m[1]) {
+    const v = m[1].trim().replace(/\s+(this|last|that)\s+(month|year|week)\b.*$/i, "").trim();
+    if (v.length >= 2) return v;
+  }
+  // "Is X performing well" - X is the person
+  m = raw.match(/\bis\s+(.+?)\s+performing\s+well\b/i);
+  if (m && m[1]) {
+    const v = m[1].trim().replace(/\s+(this|last|that)\s+(month|year|week)\b.*$/i, "").trim();
+    if (v.length >= 2) return v;
+  }
+  // ES: "cómo está X" / "cómo está X haciendo"
+  m = raw.match(/\bc[oó]mo\s+est[aá]\s+(.+?)(?:\s+(?:haciendo|rindiendo|performando))?(?=\s+\b(?:este|esta|el|la)\b|[?.!,;]|$)/i);
+  if (m && m[1]) {
+    const v = m[1].trim().replace(/\s+(this|last|that)\s+(month|year|week)\b.*$/i, "").trim();
+    if (v.length >= 2) return v;
+  }
+
+  // 4) primera palabra tipo "Tony este mes"
   m = raw.match(/^([A-Za-z][A-Za-z.\-_]{1,40})\b/);
   if (m && m[1]) return m[1].trim();
 

@@ -26,6 +26,9 @@ function resolvePerformanceGroupBy(dimKey) {
     pod: "PODEName",
     region: "RegionName",
     team: "TeamName",
+    director: "DirectorName",
+    intake: "intakeSpecialist",
+    attorney: "attorney",
   };
   return map[dimKey] || "submitterName";
 }
@@ -143,6 +146,15 @@ function buildPerformanceKpiSql({
     if (intakeF.locked && intakeF.value) {
       const out = injectColumnTokensLike(sql, "intakeSpecialist", String(intakeF.value), {
         exact: intakeF.exact,
+      });
+      sql = out.sql;
+      params = params.concat(out.params || []);
+    }
+
+    const directorF = readFilter(filters.director);
+    if (directorF.locked && directorF.value) {
+      const out = injectColumnTokensLike(sql, "DirectorName", String(directorF.value), {
+        exact: directorF.exact,
       });
       sql = out.sql;
       params = params.concat(out.params || []);

@@ -96,6 +96,44 @@ function dimKeyFromColumn(column = "") {
   return null;
 }
 
+/** Mapeo focus type -> dimension key (para merge) */
+const FOCUS_TO_DIM_KEY = {
+  submitter: "person",
+  office: "office",
+  pod: "pod",
+  team: "team",
+  region: "region",
+  director: "director",
+  intake: "intake",
+  attorney: "attorney",
+};
+
+/** Dimensiones que son "scope" (al cambiar scope, se limpian las demás) */
+const SCOPE_DIM_KEYS = new Set(["person", "office", "pod", "team", "region", "director", "intake", "attorney"]);
+
+/**
+ * Merge focus (scope wizard) en filters para que se aplique el filtro correspondiente.
+ * Cuando scopeMode=focus, SOLO se usa el filtro del focus actual (se limpian los de scope previo).
+ * Si focus.value es null (usuario eligió tipo pero aún no el valor), limpia scope previo para evitar office cuando eligió attorney.
+ */
+function mergeFocusIntoFilters(filters = {}, ctx = {}) {
+  if (ctx.scopeMode !== "focus" || !ctx.focus?.type) {
+    return filters;
+  }
+  const dimKey = FOCUS_TO_DIM_KEY[ctx.focus.type] || ctx.focus.type;
+  if (!dimKey) return filters;
+
+  const next = { ...filters };
+  for (const k of SCOPE_DIM_KEYS) {
+    if (k === dimKey && ctx.focus?.value) {
+      next[k] = { value: String(ctx.focus.value).trim(), locked: true, exact: true };
+    } else {
+      delete next[k];
+    }
+  }
+  return next;
+}
+
 /**
  * ✅ Clona filtros dinámicamente desde el registry
  * - Evita perder locks cuando agregas nuevas dimensiones
@@ -166,13 +204,22 @@ function buildSqlFixMessage(uiLang, originalQuestion, badSql, mysqlError) {
   );
 }
 
+/** Mapeo dimKey -> focusType (para pick_dimension_candidate) */
+const DIM_KEY_TO_FOCUS_TYPE = Object.fromEntries(
+  Object.entries(FOCUS_TO_DIM_KEY).map(([ft, dk]) => [dk, ft])
+);
+
 module.exports = {
   wantsToChange,
   wantsToClear,
   dimKeyFromColumn,
   cloneFilters,
+  mergeFocusIntoFilters,
   applyLockedFiltersToSql,
   buildSqlFixMessage,
+  SCOPE_DIM_KEYS,
+  FOCUS_TO_DIM_KEY,
+  DIM_KEY_TO_FOCUS_TYPE,
   norm,
   lc,
   includesAny,

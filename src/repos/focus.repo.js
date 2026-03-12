@@ -2,6 +2,7 @@
 const pool = require("../infra/db.pool");
 const { FOCUS } = require("../domain/focus/focusRegistry");
 const { tokenizePersonName } = require("../utils/chatRoute.helpers");
+const { validateEntityCandidate } = require("../utils/entityCandidate");
 
 function likeWrap(q) {
   const s = String(q || "").trim();
@@ -19,12 +20,18 @@ function buildActiveClause(cfg) {
   return { sql: ` AND ${cfg.activeCol} IN (${ph})`, params: truthy };
 }
 
-async function findFocusCandidates({ type, query, limit = 10 }) {
+async function findFocusCandidates({ type, query, limit = 500 }) {
   const cfg = FOCUS[type];
   if (!cfg) throw new Error(`Invalid focus type: ${type}`);
 
-  const q = String(query || "").trim();
-  if (!q) return [];
+  const qRaw = String(query || "").trim();
+  if (!qRaw) return [];
+
+  const validation = validateEntityCandidate(qRaw, { source: "findFocusCandidates", intent: type });
+  if (!validation.ok) {
+    return [];
+  }
+  const q = validation.value;
 
   const cols = (cfg.searchCols || []).filter(Boolean);
   if (!cols.length) return [];
@@ -32,9 +39,9 @@ async function findFocusCandidates({ type, query, limit = 10 }) {
    const active = buildActiveClause(cfg);
 
   // Estrategia:
-  // - OR: comportamiento actual
-  // - TOKENS_AND: AND por token, y cada token busca en (col1 OR col2 OR ...)
-  const useTokensAnd = ["submitter", "intake", "director", "attorney"].includes(cfg.key);
+  // - TOKENS_AND: AND por token (encuentra "Porras, Karla" cuando buscas "Karla Porras")
+  // - OR: búsqueda literal para el resto
+  const useTokensAnd = ["submitter", "intake", "director", "attorney", "region", "team", "office", "pod"].includes(cfg.key);
 
   let whereSql = "";
   let whereParams = [];
@@ -70,10 +77,17 @@ async function findFocusCandidates({ type, query, limit = 10 }) {
     FROM ${cfg.table}
     WHERE ${whereSql}
     ${active.sql}
-    LIMIT ${Number(limit) || 10}
+    LIMIT ${Number(limit) || 500}
   `;
 
-  const [rows] = await pool.query(sql, [...whereParams, ...active.params]);
+  const params = [...whereParams, ...active.params];
+  if (process.env.LOG_SQL || process.env.DEBUG_PICK) {
+    console.log(`[findFocusCandidates] type=${type} query="${q}" table=${cfg.table} searchCols=[${cols.join(",")}]`);
+    console.log(`[findFocusCandidates] SQL:\n${sql.trim()}`);
+    console.log(`[findFocusCandidates] params:`, JSON.stringify(params));
+  }
+
+  const [rows] = await pool.query(sql, params);
   return rows || [];
 
 }

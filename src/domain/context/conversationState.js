@@ -28,9 +28,13 @@ function setPending(clientId, pending) {
 function clearPending(clientId) {
   const x = store.get(clientId);
   if (!x) return;
+  const hadPending = !!x.pending;
   x.pending = null;
   x.ts = Date.now();
   store.set(clientId, x);
+  if (process.env.LOG_SQL || process.env.DEBUG_PICK) {
+    console.log(`[conversationState] clearPending cid="${clientId}" hadPending=${hadPending}`);
+  }
 }
 
 function getContext(clientId) {

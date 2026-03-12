@@ -7,7 +7,7 @@ const { validateAnalyticsSql } = require("../../../../sqlGuard");
 /* Services */
 
 const { buildOwnerAnswer } = require("../../../services/answers/ownerAnswer.service");
-const { buildKpiPackSql } = require("../../../services/kpis/kpiPack.service");
+const { buildKpiPackSql, extractTimeWindow } = require("../../../services/kpis/kpiPack.service");
 const { buildSqlFromQuestion } = require("../sql/sqlBuilder");
 
 
@@ -25,11 +25,12 @@ const { buildSqlPipeline } = require("../pipeline/sql.pipeline");
 const { applyLockedFiltersParam } = require("../pipeline/filterInjection");
 
 /* Utils */
-const { logSql, tokenizePersonName } = require("../../../utils/chatRoute.helpers");
-const { friendlyError } = require("../../../utils/errors");
+const { logSql, tokenizePersonName, isResolvedEntityReusable } = require("../../../utils/chatRoute.helpers");
+const { friendlyError, noDataFoundResponse } = require("../../../utils/errors");
+const { buildActiveFiltersText } = require("../../../domain/ui/activeFilters");
 const { buildSqlFixMessage } = require("../../../utils/chatContextLocks");
 const { buildMiniChart } = require("../../../utils/miniChart");
-const { safeExtractExplicitPerson, fallbackNameFromText } = require("../../../utils/personDetect");
+const { getExplicitPersonFromMessage } = require("../../../utils/personDetect");
 
 /* UI */
 const {
@@ -37,6 +38,7 @@ const {
   looksLikeKpiPackRow,
   buildInsightCards,
 } = require("../../../domain/ui/cardsAndChart.builder");
+const { buildSuggestions } = require("../../../domain/ui/suggestions.builder");
 
 const chatRepo = require("../../../repos/chat.repo");
 
@@ -45,6 +47,10 @@ const chatRepo = require("../../../repos/chat.repo");
 function mergeFiltersFromContext(cid, localFilters) {
   if (!cid) return localFilters || {};
   const ctxNow = getContext(cid) || {};
+  // Con scope focus, NO hacer merge: los filtros ya vienen correctos (solo la dim del focus)
+  if (ctxNow.scopeMode === "focus" && ctxNow.focus?.value) {
+    return localFilters || {};
+  }
   return { ...(ctxNow.filters || {}), ...(localFilters || {}) };
 }
 
@@ -85,12 +91,20 @@ async function handleNormalAi({
   userWantsPersonChange,
   suggestionsBase,
   userName,
+  forcedPick,
+  pendingContext,
 }) {
-  // ====== Disambiguación de PERSON (esto estaba en el controller) ======
-  if (cid) {
-    let explicitPersonRaw =
-      safeExtractExplicitPerson(effectiveMessage, uiLang) || fallbackNameFromText(effectiveMessage);
+  // Si venimos de pick (person, dimensión o focus submitter), no re-disambiguar (evita ciclo)
+  const justAppliedPick = Boolean(
+    forcedPick &&
+      (pendingContext?.dimKey === "person" ||
+        pendingContext?.kind === "pick_dimension_candidate" ||
+        (pendingContext?.kind === "pick_focus_candidate" && pendingContext?.focusType === "submitter"))
+  );
 
+  // ====== Disambiguación de PERSON (esto estaba en el controller) ======
+  if (cid && !justAppliedPick) {
+    let explicitPersonRaw = getExplicitPersonFromMessage(effectiveMessage, uiLang);
     explicitPersonRaw = explicitPersonRaw ? String(explicitPersonRaw).trim() : null;
 
     if (explicitPersonRaw && !userWantsPersonChange) {
@@ -99,6 +113,10 @@ async function handleNormalAi({
           ? String(filters.person.value).trim()
           : "";
 
+      // Reuse previously resolved entity when same short name (e.g. "Tony" → "Tony Press Accidente Inc")
+      if (currentLocked && isResolvedEntityReusable(explicitPersonRaw, currentLocked)) {
+        // no-op: keep current lock, skip candidate search
+      } else {
       const isDifferent =
         !currentLocked || currentLocked.toLowerCase() !== explicitPersonRaw.toLowerCase();
 
@@ -156,18 +174,23 @@ async function handleNormalAi({
           persistContextFilters({ cid, filters, lastPerson: explicitPersonRaw, pdfUser: null });
         }
       }
+      }
     }
   }
 
   // ====== NORMAL IA -> SQL ======
   const questionForAi = messageWithDefaultPeriod;
 
-  const sqlKey = `${uiLang}|${questionForAi}`;
+  // Cache key incluye filtros bloqueados para que la IA no genere filtros que ya aplicamos
+  const lockedKeys = filters && typeof filters === 'object'
+    ? Object.keys(filters).filter((k) => filters[k]?.locked).sort().join(',')
+    : '';
+  const sqlKey = `${uiLang}|${questionForAi}|${lockedKeys}`;
   let sqlObj = cacheGet(__cache.sqlFromQ, sqlKey);
 
   if (!sqlObj) {
     const tStartAi = Date.now();
-    sqlObj = await buildSqlFromQuestion(questionForAi, uiLang);
+    sqlObj = await buildSqlFromQuestion(questionForAi, uiLang, { lockedFilters: filters });
     cacheSet(__cache.sqlFromQ, sqlKey, sqlObj, 3 * 60 * 1000);
     if (debugPerf) timers.mark(`buildSqlFromQuestion ${Date.now() - tStartAi}ms`);
   } else {
@@ -177,7 +200,15 @@ async function handleNormalAi({
   let sql = sqlObj.sql;
   let comment = sqlObj.comment || null;
 
+  if (logEnabled) {
+    console.log(`[${reqId}] [normalAi] 1) sqlObj.sql (IA) hasOfficeName=${sql.includes("OfficeName")} hasSubmitter=${sql.includes("submitter")} hasAttorney=${sql.includes("attorney")}`);
+  }
+
   sql = buildSqlPipeline(sql, questionForAi);
+
+  if (logEnabled) {
+    console.log(`[${reqId}] [normalAi] 2) after buildSqlPipeline hasOfficeName=${sql.includes("OfficeName")} hasSubmitter=${sql.includes("submitter")} hasAttorney=${sql.includes("attorney")}`);
+  }
 
   let safeSql;
   try {
@@ -210,11 +241,22 @@ async function handleNormalAi({
   }
 
   async function runMainQuery(baseSql) {
+    const focusType = ctx?.scopeMode === "focus" && ctx?.focus?.type ? String(ctx.focus.type).trim() : null;
+    const hasOrgScope =
+      focusType && ["attorney", "office", "pod", "team", "region", "director", "intake"].includes(focusType) ||
+      ["attorney", "office", "pod", "team", "region", "director", "intake"].some(
+        (k) => filters?.[k]?.locked && filters?.[k]?.value
+      );
+    const personToInject = hasOrgScope ? null : personValueFinal;
+    if (logEnabled) {
+      console.log(`[${reqId}] [normalAi] runMainQuery focusType=${focusType || "(null)"} hasOrgScope=${hasOrgScope} personToInject=${personToInject ? "SET" : "null"} filters.attorney=${!!(filters?.attorney?.locked && filters?.attorney?.value)}`);
+    }
     const out = applyLockedFiltersParam({
       baseSql,
       filters,
-      personValueFinal,
+      personValueFinal: personToInject,
       listDimensions,
+      focusType,
     });
 
     const finalSql = out.sql;
@@ -245,7 +287,7 @@ async function handleNormalAi({
 
       let retry = cacheGet(__cache.sqlFromQ, retryKey);
       if (!retry) {
-        retry = await buildSqlFromQuestion(fixMessage, uiLang);
+        retry = await buildSqlFromQuestion(fixMessage, uiLang, { lockedFilters: filters });
         cacheSet(__cache.sqlFromQ, retryKey, retry, 3 * 60 * 1000);
       }
 
@@ -292,6 +334,33 @@ async function handleNormalAi({
 
   if (logEnabled) logSql(reqId, "normal_mode executedSqlFinal", executedSqlFinal, execParams);
 
+  if (!Array.isArray(rows) || rows.length === 0) {
+    const hasRestrictiveFilters = ["attorney", "office", "pod", "team", "region", "director", "intake"].some(
+      (k) => filters?.[k]?.locked && filters[k].value
+    );
+    const w = extractTimeWindow(messageWithDefaultPeriod, uiLang, 30);
+    const period = w?.matched && w?.label ? w.label : undefined;
+    const activeFiltersText = buildActiveFiltersText(filters, period, uiLang);
+    const { answer, suggestions } = noDataFoundResponse(uiLang, {
+      personName: personValueFinal || undefined,
+      period,
+      hasRestrictiveFilters,
+      activeFiltersText: activeFiltersText || undefined,
+    });
+    return {
+      ok: true,
+      answer,
+      cards: null,
+      rowCount: 0,
+      aiComment: "no_data",
+      userName,
+      chart: null,
+      suggestions,
+      executedSql: debug ? executedSqlFinal : undefined,
+      perf: debugPerf ? timers.done() : undefined,
+    };
+  }
+
   // KPI pack post
   const looksAggregated = /\b(count|sum|avg|min|max)\s*\(|\bgroup\s+by\b/i.test(executedSqlFinal);
 
@@ -325,6 +394,10 @@ async function handleNormalAi({
     ? buildInsightCards(uiLang, { windowLabel: kpiWindow, kpiPack, mode: "normal" })
     : null;
 
+  const droppedRate = Number(kpiPack?.dropped_rate ?? 0);
+  const highDropRate = droppedRate >= 40;
+  const suggestions = buildSuggestions(effectiveMessage, uiLang, { highDropRate });
+
   return {
     ok: true,
     answer,
@@ -333,7 +406,8 @@ async function handleNormalAi({
     aiComment: comment,
     userName,
     chart: chart || null,
-    suggestions: suggestionsBase,
+    suggestions,
+    kpiWindow: kpiWindow || undefined,
     executedSql: debug ? executedSqlFinal : undefined,
     perf: debugPerf ? timers.done() : undefined,
     ...(debug ? { chartDebug: { chartWanted, rowsLen: rows.length } } : {}),
