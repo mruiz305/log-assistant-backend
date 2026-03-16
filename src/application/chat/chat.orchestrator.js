@@ -28,10 +28,18 @@ const { buildSuggestions } = require("../../domain/ui/suggestions.builder");
 
 /* Utils */
 const { greetingAnswer, isGreeting } = require("../../utils/greeting");
+const {
+  classifyIntent,
+  planQuery,
+  shouldUsePlanner,
+  expandFollowUp,
+  handleConversational,
+} = require("./aiOrchestrator");
+const obs = require("./aiOrchestrator/aiOrchestratorObservability");
 const { normalizeQuickActionMessage } = require("../../utils/quickActions");
 const { normalizeMessage } = require("../../utils/messageNormalizer");
 const { parseAnalyticsQuestion } = require("../../utils/analyticsParser");
-const { looksLikeNewTopic } = require("../../utils/topic");
+const { looksLikeNewTopic, isEntityClarification, isEntitySwitchFollowUp, extractEntitySwitch } = require("../../utils/topic");
 const { friendlyError } = require("../../utils/errors");
 const {
   isFollowUpQuestion,
@@ -109,8 +117,11 @@ async function chatOrchestratorHandle({
   function withScope(out) {
   if (!out || !cid) return out;
   const ctxNow = getContext(cid) || {};
-  const scope = buildScopeUi(ctxNow, uiLang);
   const period = out?.kpiWindow || out?.windowLabel || out?.logsPerformanceReview?.windowLabel;
+  if (period && typeof period === "string" && period.length > 0) {
+    setContext(cid, { lastPeriod: period, lastMetric: out?.lastMetric || "cases" });
+  }
+  const scope = buildScopeUi(ctxNow, uiLang);
   const activeFilters = buildActiveFiltersUi(ctxNow.filters || {}, period, ctxNow, uiLang);
   return { ...out, scope, activeFilters };
 }
@@ -130,7 +141,10 @@ async function chatOrchestratorHandle({
   }
 
   let effectiveMessage = normalizeQuickActionMessage(message, uiLang);
-  effectiveMessage = normalizeMessage(effectiveMessage, uiLang).normalized;
+  // Do not normalize entity clarification ("Which Tony did you mean?") - keep original
+  if (!isEntityClarification(effectiveMessage)) {
+    effectiveMessage = normalizeMessage(effectiveMessage, uiLang).normalized;
+  }
 
   const ctxInitial = cid ? getContext(cid) || {} : {};
   let activeScope = ctxInitial.scopeMode === "focus" && ctxInitial.focus?.type ? ctxInitial.focus.type : null;
@@ -478,6 +492,25 @@ if (cid) {
       });
     }
 
+    /* ================= ENTITY CLARIFICATION (before conversational/analysis_followup) =================
+       "Which Tony did you mean?", "Which one?" etc. must not be expanded or routed to analysis.
+       When pending with options: we already returned in pending block (pick not resolved).
+       When no pending: return short clarification, do not run queries. */
+    if (isEntityClarification(effectiveMessage)) {
+      obs.track("entity_clarification_handled");
+      return withScope({
+        ok: true,
+        answer: uiLang === "es"
+          ? "Por favor selecciona una de las opciones que te mostré arriba, o reformula tu pregunta indicando la persona o entidad que quieres consultar."
+          : "Please select one of the options I showed above, or rephrase your question to specify which person or entity you want to query.",
+        rowCount: 0,
+        aiComment: "entity_clarification",
+        userName: cid ? getUserName(cid) || null : null,
+        chart: null,
+        suggestions: suggestionsBase,
+      });
+    }
+
     /* ================= USER NAME ================= */
     let userName = null;
     const extracted = extractUserNameFromMessage(effectiveMessage);
@@ -486,8 +519,61 @@ if (cid) {
       userName = extracted;
     } else if (cid) userName = getUserName(cid);
 
-    /* ================= GREETING ================= */
-    if (isGreeting(effectiveMessage)) {
+    /* ================= AI ORCHESTRATOR: intent classification ================= */
+    const ctxForAI = cid ? getContext(cid) || {} : {};
+    const aiContext = {
+      lastPerson: ctxForAI.lastPerson || ctxForAI.filters?.person?.value || "",
+      lastPeriod: ctxForAI.lastPeriod || ctxForAI.kpiWindow || "",
+      lastMetric: ctxForAI.lastMetric || "",
+      filters: ctxForAI.filters || {},
+      uiLang,
+    };
+    let classification = null;
+    try {
+      classification = await classifyIntent(effectiveMessage, aiContext, {
+        useAI: process.env.AI_ORCHESTRATOR_ENABLED !== "false",
+      });
+      if (classification) obs.track("classification_used", { intent: classification.primary_intent });
+    } catch (e) {
+      if (logEnabled) console.warn(`[${reqId}] [aiOrchestrator] classifyIntent failed:`, e?.message);
+      obs.track("classification_failed");
+    }
+
+    /* ================= CONVERSATIONAL / GREETING / CONVERSATIONAL_FOLLOWUP ================= */
+    const isPureConversational =
+      (classification?.primary_intent === "greeting" || classification?.primary_intent === "conversational") &&
+      !classification?.needs_data &&
+      !classification?.needs_sql &&
+      !classification?.needs_analysis;
+
+    const isConversationalFollowup =
+      classification?.primary_intent === "conversational_followup" &&
+      !classification?.needs_data &&
+      !classification?.needs_sql;
+
+    const isAnalysisFollowup =
+      classification?.primary_intent === "analysis_followup" &&
+      !classification?.needs_data &&
+      !classification?.needs_sql;
+
+    if (isPureConversational || isConversationalFollowup || isAnalysisFollowup) {
+      const trackLabel = isAnalysisFollowup ? "analysis_followup_handled" : isConversationalFollowup ? "conversational_followup_handled" : "conversational_handled";
+      obs.track(trackLabel);
+      const convOut = await handleConversational({
+        message: effectiveMessage,
+        cid,
+        uiLang,
+        logEnabled,
+        reqId,
+        isFollowUp: isConversationalFollowup || isAnalysisFollowup,
+        isAnalysisFollowup,
+        context: (isConversationalFollowup || isAnalysisFollowup) ? { lastPerson: aiContext.lastPerson, lastPeriod: aiContext.lastPeriod, lastMetric: aiContext.lastMetric } : null,
+      });
+      return withScope({ ...convOut, userName: userName || convOut.userName });
+    }
+
+    if (!classification && isGreeting(effectiveMessage)) {
+      obs.track("greeting_fallback");
       return withScope({
         ok: true,
         answer: greetingAnswer(uiLang, userName),
@@ -497,6 +583,72 @@ if (cid) {
         chart: null,
         suggestions: suggestionsBase,
       });
+    }
+
+    /* ================= FOLLOW-UP EXPANSION ================= */
+    if (classification?.is_follow_up && (aiContext.lastPerson || aiContext.lastPeriod)) {
+      try {
+        const expanded = await expandFollowUp(effectiveMessage, aiContext, {
+          useAI: process.env.AI_ORCHESTRATOR_ENABLED !== "false",
+        });
+        if (expanded && expanded.length > 5) {
+          effectiveMessage = expanded;
+          obs.track("followup_expansion_success");
+          if (logEnabled) console.log(`[${reqId}] [aiOrchestrator] follow-up expanded to: "${expanded}"`);
+        } else {
+          obs.track("followup_expansion_skipped");
+        }
+      } catch (e) {
+        obs.track("followup_expansion_failed");
+        if (logEnabled) console.warn(`[${reqId}] [aiOrchestrator] expandFollowUp failed:`, e?.message);
+      }
+    } else if (classification?.is_follow_up && !(aiContext.lastPerson || aiContext.lastPeriod)) {
+      obs.track("followup_expansion_skipped");
+    }
+
+    /* ================= ENTITY-SWITCH: clear prior entity before any handler =================
+       For "What about Maria?", "And Juan?", etc.: new entity must override. Clear filters/lastPerson
+       so SQL never uses the old entity. The expanded message contains the new entity; dimension
+       resolution will set it. */
+    if (cid && isEntitySwitchFollowUp(message)) {
+      const entitySwitch = extractEntitySwitch(message);
+      if (entitySwitch?.entity) {
+        const ctxNow = getContext(cid) || {};
+        const nextFilters = { ...(ctxNow.filters || {}) };
+        nextFilters.person = null;
+        const FOCUS_TO_DIM = { submitter: "person", office: "office", pod: "pod", team: "team", region: "region", director: "director", intake: "intake", attorney: "attorney" };
+        const isPersonScope = ctxNow.scopeMode === "focus" && FOCUS_TO_DIM[ctxNow.focus?.type] === "person";
+        setContext(cid, {
+          filters: nextFilters,
+          lastPerson: null,
+          ...(isPersonScope ? { scopeMode: "general", focus: null } : {}),
+        });
+        obs.track("entity_switch_clear");
+        if (logEnabled) console.log(`[${reqId}] [entitySwitch] cleared prior entity for new "${entitySwitch.entity}"`);
+      }
+    }
+
+    /* ================= AI QUERY PLANNER (conditional) =================
+       Only for follow-up, mixed, analysis, disambiguation, comparison.
+       Gate: AI_QUERY_PLANNER_ENABLED=true. No extra latency for simple KPI/greeting. */
+    let queryPlan = null;
+    const plannerEnabled = process.env.AI_QUERY_PLANNER_ENABLED === "true";
+    if (plannerEnabled && classification && shouldUsePlanner(classification)) {
+      try {
+        queryPlan = await planQuery(effectiveMessage, classification, aiContext);
+        obs.track("planner_invoked", { task_type: queryPlan?.task_type });
+        if (queryPlan && cid) setContext(cid, { queryPlan });
+        if (logEnabled && queryPlan) {
+          console.log(`[${reqId}] [aiOrchestrator] queryPlan: task_type=${queryPlan.task_type} suggested_period=${queryPlan.suggested_period} suggested_entity=${queryPlan.suggested_entity}`);
+        }
+      } catch (e) {
+        obs.track("planner_failed");
+        if (logEnabled) console.warn(`[${reqId}] [aiOrchestrator] planQuery failed:`, e?.message);
+      }
+    } else if (plannerEnabled && classification && !shouldUsePlanner(classification)) {
+      obs.track("planner_skipped");
+    } else if (!plannerEnabled && classification && shouldUsePlanner(classification)) {
+      obs.track("legacy_fallback", { reason: "planner_disabled" });
     }
 
     /* ================= LOGS LOOKUP (tabla + registros + PDF opcional) ================= */
@@ -617,28 +769,27 @@ if (cid) {
 
     const lastPerson = ctx.lastPerson ? String(ctx.lastPerson).trim() : null;
 
-    // Si el parser determinístico ya extrajo entidad, fijar filtros según scope y evitar re-guessing.
+    // Si el parser determinístico ya extrajo entidad: attorney se fija directo; submitter pasa por
+    // resolveDimension para mostrar pick cuando hay varios candidatos (ej. varios "Tony").
     if (parsedAnalytics?.entity?.name) {
       const name = String(parsedAnalytics.entity.name).trim();
       const scopeType = parsedAnalytics.entity.type || activeScope;
       if (name && scopeType) {
         if (scopeType === "attorney") {
           filters.attorney = { value: name, locked: true, exact: false };
-        } else if (scopeType === "submitter") {
-          filters.person = { value: name, locked: true, exact: false };
-          skipPersonDimensionResolutionThisTurn = true;
+          if (cid) {
+            const ctxNow = getContext(cid) || {};
+            const nextFilters = { ...(ctxNow.filters || {}), ...(filters || {}) };
+            setContext(cid, { ...ctxNow, filters: nextFilters });
+          }
+          if (logEnabled) {
+            console.log(`[${reqId}] [parse] using parser entity="${name}" as scope=attorney (filters updated)`);
+          }
         }
-        if (cid) {
-          const ctxNow = getContext(cid) || {};
-          const nextFilters = { ...(ctxNow.filters || {}), ...(filters || {}) };
-          const nextCtx = { ...ctxNow, filters: nextFilters };
-          if (scopeType === "submitter") nextCtx.lastPerson = name;
-          setContext(cid, nextCtx);
-        }
-        if (logEnabled) {
-          console.log(
-            `[${reqId}] [parse] using parser entity="${name}" as scope="${scopeType}" (filters updated)`
-          );
+        // submitter: NO fijar filters aquí; dejamos que extractedDim use el nombre y
+        // resolveDimension muestre pick si hay múltiples candidatos
+        if (scopeType === "submitter" && logEnabled) {
+          console.log(`[${reqId}] [parse] parser entity submitter="${name}" -> will resolve for pick`);
         }
       }
     }
@@ -721,8 +872,18 @@ if (cid) {
     if (!skipDimensionResolutionEntirelyThisTurn && !skipDimBecauseParsedAttorney) {
       extractedDim = extractDimensionAndValue(effectiveMessage, uiLang);
 
+      // Entity-switch fallback: "What about Maria?" may not expand or extractor may miss person.
+      // Use extractEntitySwitch from original message to force person extraction.
+      const needsEntitySwitchFallback = isEntitySwitchFollowUp(message) && (!extractedDim || extractedDim.key !== "person");
+      if (needsEntitySwitchFallback) {
+        const es = extractEntitySwitch(message);
+        if (es?.entity) {
+          extractedDim = { key: "person", value: es.entity, rawValue: es.entity };
+          if (logEnabled) console.log(`[${reqId}] [entitySwitch] using entity from switch: "${es.entity}"`);
+        }
+      }
+
       // Override: si scope focus está activo, SIEMPRE intentar extraer valor del mensaje para esa dim
-      // y buscar candidatos en la tabla nexus (igual que attorney/office/pod)
       const focusType = ctx?.scopeMode === "focus" ? ctx?.focus?.type : null;
       const ctxValue = ctx?.focus?.value ? String(ctx.focus.value).trim() : "";
       const ctxValueLooksWrong = /^of\s+/i.test(ctxValue);
@@ -734,6 +895,14 @@ if (cid) {
       if (shouldOverrideScope) {
         const override = extractDimensionForFocusType(effectiveMessage, focusType, uiLang);
         if (override?.value) extractedDim = override;
+      }
+
+      // Parser entity submitter tiene prioridad: asegura pick cuando hay varios "Tony" etc.
+      if (parsedAnalytics?.entity?.type === "submitter" && parsedAnalytics?.entity?.name) {
+        const parserName = String(parsedAnalytics.entity.name).trim();
+        if (parserName) {
+          extractedDim = { key: "person", value: parserName, rawValue: parserName };
+        }
       }
 
       // si venimos de pick (person u otra dimensión), NO re-resolver esa dimensión (evita ciclo)
@@ -930,9 +1099,10 @@ if (cid) {
       }
     }
 
-    // Default window desde memoria
+    // Default window desde memoria; planner suggested_period cuando no hay periodo explícito
     const msgWithUserDefault = applyDefaultWindowToMessage(effectiveMessage, uiLang, userMemory);
-    const messageWithDefaultPeriod = ensureDefaultMonth(msgWithUserDefault, uiLang);
+    const suggestedPeriod = queryPlan?.suggested_period || null;
+    const messageWithDefaultPeriod = ensureDefaultMonth(msgWithUserDefault, uiLang, suggestedPeriod);
 
     /* =====================================================
        PARSED INTENT ROUTING (comparison_vs_average / logs_review)
@@ -946,9 +1116,12 @@ if (cid) {
         logEnabled,
         uiLang,
         messageWithDefaultPeriod,
+        effectiveMessage,
         filters,
         parsedAnalytics,
         userName,
+        lastPerson,
+        queryPlan: queryPlan || undefined,
       });
       if (out) {
         console.log(`[${reqId}] [route] generic fallthrough skipped=true reason=parsed_entity_comparison`);
@@ -975,6 +1148,7 @@ if (cid) {
         filters,
         suggestionsBase,
         userName,
+        queryPlan: queryPlan || undefined,
       });
       logsReviewReturned = !!out;
       if (out) {
@@ -1002,6 +1176,7 @@ if (cid) {
         filters,
         suggestionsBase,
         userName,
+        queryPlan: queryPlan || undefined,
       });
       performanceEntered = true;
       performanceReturned = !!out;
@@ -1031,9 +1206,9 @@ if (cid) {
         hasAnyPersonSignal,
         suggestionsBase,
         userName,
-
         forcedPick,
         pendingContext,
+        queryPlan: queryPlan || undefined,
       });
       if (out) return withScope(out);
     }
@@ -1062,6 +1237,7 @@ if (cid) {
       userName,
       forcedPick,
       pendingContext,
+      queryPlan: queryPlan || undefined,
     }));
   } catch (err) {
     // rollback

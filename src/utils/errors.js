@@ -2,8 +2,8 @@
 function friendlyError(uiLang, reqId) {
   const base =
     uiLang === "es"
-      ? "Ups 😅 no pude completar eso ahora mismo. ¿Puedes intentar de nuevo? Si quieres, dime el nombre completo y el período (por ejemplo: “este mes”)."
-      : "Oops 😅 I couldn’t complete that right now. Can you try again? If you want, tell me the full name and the time window (e.g., “this month”).";
+      ? "No pude procesar tu solicitud en este momento. Por favor, inténtalo de nuevo. Si la consulta incluye una persona, indica el nombre completo y el período (por ejemplo: este mes)."
+      : "I wasn't able to process your request right now. Please try again. If your query involves a specific person, include their full name and time window (e.g., this month).";
   return base;
 }
 
@@ -45,9 +45,23 @@ function noDataFoundResponse(uiLang, opts = {}) {
     answer = answer + prefix + activeFiltersText.trim() + ".";
   }
 
-  const suggestions = opts.suggestions || (isEs
-    ? ["Probar otro período", "Especificar nombre completo", "Cambiar filtro (submitter, attorney, office)"]
-    : ["Try another time period", "Specify a full name", "Change the filter (submitter, attorney, office)"]);
+  // Sugerencias como acciones: { text, action } para que el frontend ejecute la acción en vez de enviar texto como pregunta
+  const defaultSuggestions = isEs
+    ? [
+        { text: "2025", action: null },
+        { text: "Últimos 7 días", action: null },
+        { text: "Este mes", action: null },
+        { text: "Cambiar filtro", action: "change_scope" },
+        { text: "Especificar nombre completo", action: "change_scope" },
+      ]
+    : [
+        { text: "2025", action: null },
+        { text: "Last 7 days", action: null },
+        { text: "This month", action: null },
+        { text: "Change filter", action: "change_scope" },
+        { text: "Specify full name", action: "change_scope" },
+      ];
+  const suggestions = opts.suggestions || defaultSuggestions;
   return { answer, suggestions };
 }
 

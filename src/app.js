@@ -62,6 +62,14 @@ app.use("/api", chatRoute);
 app.use("/api/auth", authRoute);
 app.use("/api/dashboard", dashboardRoute);
 
+// Internal: ai-orchestrator counters (only when AI_ORCHESTRATOR_OBSERVABILITY=true)
+if (process.env.AI_ORCHESTRATOR_OBSERVABILITY === "true") {
+  const { getCounters } = require("./application/chat/aiOrchestrator/aiOrchestratorObservability");
+  app.get("/api/internal/ai-orchestrator-stats", (req, res) => {
+    res.json({ counters: getCounters(), ts: new Date().toISOString() });
+  });
+}
+
 // 7) error handler (último)
 app.use(errorMiddleware);
 

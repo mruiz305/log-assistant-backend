@@ -1,20 +1,40 @@
 const sqlRepo = require("../../../repos/sql.repo");
 const { buildKpiPackSql, buildPeerComparisonSql } = require("../../../services/kpis/kpiPack.service");
 const { buildInsightCards } = require("../../../domain/ui/cardsAndChart.builder");
+const { canUseSuggestedEntity } = require("../aiOrchestrator/queryPlanGuardrails");
 
 async function handleEntityComparison({
   reqId,
   logEnabled,
   uiLang,
   messageWithDefaultPeriod,
+  effectiveMessage,
   filters,
   parsedAnalytics,
   userName,
+  lastPerson,
+  queryPlan,
 }) {
   if (!parsedAnalytics || parsedAnalytics.intent !== "comparison_vs_average") return null;
-  if (!parsedAnalytics.entity?.name || !parsedAnalytics.period) return null;
+  if (!parsedAnalytics.period) return null;
 
-  const entityName = String(parsedAnalytics.entity.name).trim();
+  let entityName = parsedAnalytics.entity?.name ? String(parsedAnalytics.entity.name).trim() : null;
+  if (!entityName && queryPlan?.suggested_entity) {
+    const guard = canUseSuggestedEntity({
+      queryPlan,
+      lastPerson: lastPerson || filters?.person?.value,
+      effectiveMessage: effectiveMessage || messageWithDefaultPeriod,
+      uiLang,
+      logTag: "entityComparison",
+    });
+    if (guard.ok) {
+      entityName = String(queryPlan.suggested_entity).trim();
+      if (logEnabled) console.log(`[${reqId}] [entityComparison] queryPlan.suggested_entity applied entity="${entityName}"`);
+    } else if (logEnabled) {
+      console.log(`[${reqId}] [entityComparison] queryPlan.suggested_entity rejected reason=${guard.reason}`);
+    }
+  }
+  if (!entityName) return null;
   const period = parsedAnalytics.period;
 
   console.log(

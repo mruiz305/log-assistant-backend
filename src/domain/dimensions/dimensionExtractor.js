@@ -17,6 +17,13 @@ function cleanValue(v = "") {
   return s;
 }
 
+/** Quita posesivo inglés: "Tony's" → "Tony", "Maria's" → "Maria" */
+function stripPossessive(value = "") {
+  let v = String(value || "").trim();
+  v = v.replace(/['\u2019\u2018]s\s*$/i, "").trim();
+  return v;
+}
+
 // corta "extras" al final que NO son parte del nombre (periodos / conectores)
 function stripTrailingNoise(value = "", lang = "es") {
   let v = cleanValue(value);
@@ -36,7 +43,7 @@ function stripTrailingNoise(value = "", lang = "es") {
 
   // remueve conectores/verbos colgando al final
   v = v.replace(/\b(y|and|con|with)\s*$/i, "").trim();
-  v = v.replace(/\s+(?:handle|handled|handles|manej[oó]|manejaron)\s*$/i, "").trim();
+  v = v.replace(/\s+(?:handle|handled|handles|manej[oó]|manejaron|confirm|confirmed|drop|dropped)\s*$/i, "").trim();
 
   return v;
 }
@@ -245,20 +252,26 @@ function extractDimensionAndValue(message = "", lang = "es") {
   for (const rx of [rxLeadingPersonPerformance, rxHowIsDoing, rxHowIsPerforming, rxHowHasBeenPerforming, rxIsPerformingWell]) {
     const mm = raw.match(rx);
     if (mm && mm[1]) {
-      const value = stripTrailingNoise(mm[1], lang);
+      let value = stripTrailingNoise(mm[1], lang);
+      value = stripPossessive(value);
       if (value.length >= 2 && !looksLikePeriod(value, lang) && !looksLikeTimePhrase(value)) {
         if (!isRejectedLogsIntroToken(value)) return { key: "person", value, matchType: "fallback_performance_phrase" };
       }
     }
   }
 
-  // 2a') "X's performance" - nombre (1 palabra) inmediatamente antes de 's
+  // 2a') "X's performance" / "X's drop rate" / "X's confirmed cases" - possessive entity (both ' and typographic ')
   const rxNamePossessivePerformance = /\b([A-Za-z][A-Za-z0-9\-]+)\s*['\u2019]?s\s+performance\b/i;
-  const mmPerf = raw.match(rxNamePossessivePerformance);
-  if (mmPerf && mmPerf[1]) {
-    const value = stripTrailingNoise(mmPerf[1], lang);
-    if (value.length >= 2 && !looksLikePeriod(value, lang) && !looksLikeTimePhrase(value) && !isRejectedLogsIntroToken(value)) {
-      return { key: "person", value, matchType: "fallback_performance_possessive" };
+  // Capture the name immediately before 's (use greedy .* to get LAST match for "What was Juan's" → "Juan")
+  const rxNamePossessiveMetric = /[\s\S]*\b([A-Za-z][A-Za-z0-9\-']+(?:\s+[A-Za-z][A-Za-z0-9\-']+)?)\s*['\u2019]s\s+(?:drop\s+rate|confirmed\s+cases?|performance|rate|active|problem|refer|cases?|logs?)\b/i;
+  for (const rx of [rxNamePossessiveMetric, rxNamePossessivePerformance]) {
+    const mmPerf = raw.match(rx);
+    if (mmPerf && mmPerf[1]) {
+      let value = stripTrailingNoise(mmPerf[1], lang);
+      value = stripPossessive(value);
+      if (value.length >= 2 && !looksLikePeriod(value, lang) && !looksLikeTimePhrase(value) && !isRejectedLogsIntroToken(value)) {
+        return { key: "person", value, matchType: "fallback_possessive_metric" };
+      }
     }
   }
 
@@ -289,6 +302,23 @@ function extractDimensionAndValue(message = "", lang = "es") {
     const value = stripTrailingNoise(m[1], lang);
     if (value.length >= 2 && !looksLikePeriod(value, lang) && !looksLikeTimePhrase(value) && !looksLikeAnalyticalPhrase(value) && !isRejectedLogsIntroToken(value)) {
       return { key: "person", value, matchType: "fallback_cases" };
+    }
+  }
+
+  // =========================================================
+  // 2b0) "how many [confirmed|dropped|...] cases did <PERSON> have ..."
+  //      Cubre: "How many confirmed cases did Tony have in 2025?"
+  //      (person entre "did" y "have", no "cases" como persona)
+  // =========================================================
+  const rxHowManyMetricCasesDidHaveEn =
+    /\bhow\s+many\s+(?:confirmed|dropped|problem|active|refer\s*out|referout|converted|gross)?\s*(?:cases|logs)\s+did\s+([A-Za-z][A-Za-z0-9\-']*(?:\s+[A-Za-z][A-Za-z0-9\-']*){0,2})\s+(?:have|has|had)(?=\s|\b(in|on|during|for)\b|[?.!,;:]|$)/i;
+  if (!isEs) {
+    const mm = raw.match(rxHowManyMetricCasesDidHaveEn);
+    if (mm && mm[1]) {
+      const value = stripTrailingNoise(mm[1], lang);
+      if (value.length >= 2 && !looksLikePeriod(value, lang) && !looksLikeTimePhrase(value) && !isRejectedLogsIntroToken(value)) {
+        return { key: "person", value, matchType: "fallback_howmany_metric_cases_did_have" };
+      }
     }
   }
 
@@ -356,10 +386,11 @@ function extractDimensionAndValue(message = "", lang = "es") {
   }
 
   // =========================================================
-  // 2d) "how many cases/logs did <PERSON> ..."
+  // 2d) "how many cases/logs did <PERSON> confirm/have/handle ..."
+  //     Stop at metric verb so we capture "Maria" not "Maria confirm"
   // =========================================================
   const rxCasesDidEn =
-    /\bhow\s+many\s+(?:cases|logs)\s+did\s+(.{2,60}?)(?=\s+\b(in|on|during|for)\b|[?.!,;:]|$)/i;
+    /\bhow\s+many\s+(?:cases|logs)\s+did\s+([A-Za-z][A-Za-z0-9\-']*(?:\s+[A-Za-z][A-Za-z0-9\-']*){0,2})\s+(?=\s*(?:confirm|confirmed|have|has|had|handle|handled|drop|convert|in|on|during|for)\b|[?.!,;:]|$)/i;
 
   const rxCasesDidEs =
     /\bcu[aá]ntos?\s+(?:casos|logs)\s+(?:hizo|hace|realiz[oó])\s+(.{2,60}?)(?=\s+\b(en|durante|para)\b|[?.!,;:]|$)/i;

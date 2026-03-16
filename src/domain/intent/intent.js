@@ -55,6 +55,23 @@ function classifyIntentInfo(question = '') {
     return { intent: 'help', needsSql: false };
   }
 
+  // 1b) conversational follow-up: what else, tell me more, explain that - NO SQL
+  const isConversationalFollowup =
+    /^(what else can you tell me|tell me more|explain that|go on|continue|anything else|what else)\??\s*$/i.test(q) ||
+    /^(can you give me more detail|give me more detail|more detail please)\??\s*$/i.test(q) ||
+    /^(que mas (me )?puedes decir|dime mas|explica(me)? eso|continua|sigue|algo mas|que mas)\??\s*$/i.test(q) ||
+    /^(tell me more about that|elaborate|expand on that|cuentame mas|amplia|desarrolla|dame mas detalle|mas detalle)\??\s*$/i.test(q);
+
+  if (isConversationalFollowup) return { intent: 'conversational_followup', needsSql: false };
+
+  // 1c) analysis follow-up: what does that mean, why is that, is that good or bad - NO SQL
+  const isAnalysisFollowup =
+    /^(what does that mean|why is that|why is it|is that good or bad|what should we investigate|anything unusual there)\??\s*$/i.test(q) ||
+    /^(que significa eso|por que paso eso|es eso bueno o malo|eso es bueno o malo|que deberiamos investigar|hay algo inusual)\??\s*$/i.test(q) ||
+    /^(what do you think|any red flags|any concerns)\??\s*$/i.test(q);
+
+  if (isAnalysisFollowup) return { intent: 'analysis_followup', needsSql: false };
+
   // 2) analytics (SQL)
   return { intent: classifyIntent(question), needsSql: true };
 }

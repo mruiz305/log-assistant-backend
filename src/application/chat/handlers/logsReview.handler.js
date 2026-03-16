@@ -12,7 +12,7 @@
  */
 const sqlRepo = require("../../../repos/sql.repo");
 const { getContext, setContext, setPending } = require("../../../domain/context/conversationState");
-const { wantsLogsPerformanceReview, extractEntityFromLogsPhrase, isRejectedLogsIntroToken } = require("../../../services/logsRoster/logsRoster.service");
+const { wantsLogsPerformanceReview, extractEntityFromLogsPhrase, extractEntityFromWeaknessPhrase, isRejectedLogsIntroToken } = require("../../../services/logsRoster/logsRoster.service");
 const { buildKpiPackSql, buildPeerComparisonSql, extractTimeWindow, defaultThisMonthWindow } = require("../../../services/kpis/kpiPack.service");
 const { findUserByResolvedName } = require("../../../services/pdf/pdfLinks.service");
 const { applyLockedFiltersParam } = require("../pipeline/filterInjection");
@@ -25,6 +25,7 @@ const { noDataFoundResponse } = require("../../../utils/errors");
 const { buildActiveFiltersText } = require("../../../domain/ui/activeFilters");
 const { findFocusCandidates } = require("../../../repos/focus.repo");
 const { FOCUS } = require("../../../domain/focus/focusRegistry");
+const { canUseSuggestedEntity, shouldTriggerDisambiguation } = require("../aiOrchestrator/queryPlanGuardrails");
 
 const LOGS_PREVIEW_COLUMNS = `
   idLead,
@@ -445,6 +446,7 @@ async function handleLogsReview({
   filters,
   suggestionsBase,
   userName,
+  queryPlan,
 }) {
   const wantsReview = wantsLogsPerformanceReview(effectiveMessage);
   console.log(`[${reqId}] [route] handleLogsReview entered wantsLogsPerformanceReview=${wantsReview}`);
@@ -486,7 +488,8 @@ async function handleLogsReview({
   console.log(`[${reqId}] [entity] scopeMode=${ctx.scopeMode || "null"} focus.type=${ctx.focus?.type || "null"}`);
   console.log(`[${reqId}] [entity] filters.person=${JSON.stringify(filters?.person || null)}`);
   if (!entityValue) {
-    const nlCandidateRaw = extractEntityFromLogsPhrase(effectiveMessage);
+    let nlCandidateRaw = extractEntityFromLogsPhrase(effectiveMessage);
+    if (!nlCandidateRaw) nlCandidateRaw = extractEntityFromWeaknessPhrase(effectiveMessage);
     if (nlCandidateRaw) {
       console.log(`[${reqId}] [entity_nl] matched logs phrase pattern`);
 
@@ -558,8 +561,38 @@ async function handleLogsReview({
       }
     }
     if (!entityValue) {
-      console.log(`[${reqId}] [route] logsReview returning null reason=no_entityValue (filters+ctx.focus both empty)`);
-      return null;
+      // queryPlan.suggested_entity: use when follow-up/context had entity, with guardrails
+      const lastPerson = ctx?.lastPerson || ctx?.filters?.person?.value || "";
+      const suggestedEntity = queryPlan?.suggested_entity ? String(queryPlan.suggested_entity).trim() : null;
+      const guard = suggestedEntity
+        ? canUseSuggestedEntity({ queryPlan, lastPerson, effectiveMessage, uiLang, logTag: "logsReview" })
+        : { ok: false };
+      if (suggestedEntity && guard.ok) {
+        entityValue = suggestedEntity;
+        focusType = "submitter";
+        if (logEnabled) console.log(`[${reqId}] [queryPlan] logsReview applied suggested_entity="${entityValue}"`);
+      } else if (suggestedEntity && !guard.ok && logEnabled) {
+        console.log(`[${reqId}] [queryPlan] logsReview rejected suggested_entity reason=${guard.reason}`);
+      }
+      if (!entityValue && shouldTriggerDisambiguation({ queryPlan, effectiveMessage, uiLang })) {
+        if (logEnabled) console.log(`[${reqId}] [queryPlan] logsReview triggered disambiguation_clarify`);
+        const clarify = uiLang === "es"
+          ? "¿A qué persona o equipo te gustaría que analice? Por ejemplo: 'Maria performance' o 'Oficina Miami'."
+          : "Which person or team would you like me to analyze? For example: 'Maria performance' or 'Miami office'.";
+        return {
+          ok: true,
+          answer: clarify,
+          rowCount: 0,
+          aiComment: "disambiguation_clarify",
+          userName: userName || null,
+          chart: null,
+          suggestions: suggestionsBase,
+        };
+      }
+      if (!entityValue) {
+        console.log(`[${reqId}] [route] logsReview returning null reason=no_entityValue (filters+ctx.focus both empty)`);
+        return null;
+      }
     }
   }
 
@@ -718,10 +751,12 @@ async function handleLogsReview({
       : "I couldn't generate the analysis. Please try again.";
   }
 
-  const pdfItems = logsPdfLink
+  const mentionsLogs = /\blogs?\b/i.test(effectiveMessage);
+  const showLogsLink = mentionsLogs && logsPdfLink;
+  const pdfItems = showLogsLink
     ? [{ id: "logs", label: uiLang === "es" ? "Abrir Log completo (PDF)" : "Open Full Log PDF", url: logsPdfLink }]
     : [];
-  const pdfLinks = logsPdfLink
+  const pdfLinks = showLogsLink
     ? { logsPdf: logsPdfLink, rosterPdf: null, items: pdfItems }
     : null;
 
@@ -782,7 +817,7 @@ async function handleLogsReview({
     resolvedEntity,
     kpiSummary,
     logsPreview,
-    logsPdfLink: logsPdfLink || null,
+    logsPdfLink: showLogsLink ? logsPdfLink : null,
     peerComparison: peerComparison || null,
     analysisText: analysisText.trim(),
     performanceDiagnosis: performanceDiagnosis || null,
@@ -791,7 +826,7 @@ async function handleLogsReview({
       resolvedEntity,
       kpiSummary,
       logsPreview,
-      logsPdfLink: logsPdfLink || null,
+      logsPdfLink: showLogsLink ? logsPdfLink : null,
       peerComparison: peerComparison || null,
       analysisText: analysisText.trim(),
       windowLabel: windowLabel || null,

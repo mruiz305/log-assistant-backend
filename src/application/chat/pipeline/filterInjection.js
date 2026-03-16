@@ -36,6 +36,16 @@ function stripSubmitterCoalesceLike(sql) {
     " "
   );
 
+  // Parameterized: COALESCE(...submitter...) = LOWER(TRIM(?)) or LIKE CONCAT(...,?) - avoid duplicate submitter condition
+  out = out.replace(
+    /\s+AND\s+(?:(?!\s+AND\s+)[^;])*?COALESCE\s*\(\s*NULLIF\s*\(\s*submitterName\s*,\s*['"]{2}\s*\)\s*,\s*submitter\s*\)[^;]*?=\s*LOWER\s*\(\s*TRIM\s*\(\s*\?\s*\)\s*\)(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
+    " "
+  );
+  out = out.replace(
+    /\s+AND\s+(?:(?!\s+AND\s+)[^;])*?COALESCE\s*\(\s*NULLIF\s*\(\s*submitterName\s*,\s*['"]{2}\s*\)\s*,\s*submitter\s*\)[^;]*?LIKE\s+CONCAT\s*\([^)]*\?\s*[^)]*\)(?=\s+AND|\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/gis,
+    " "
+  );
+
   return out
     .replace(/\bWHERE\s+AND\b/gi, "WHERE ")
     .replace(/\bWHERE\s*(GROUP\s+BY|ORDER\s+BY|LIMIT)\b/gi, "$1")
@@ -109,7 +119,7 @@ function injectSubmitterTokensLike(sql, personValue, opts = {}) {
   const expr = "LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter)))";
 
   if (exact) {
-    const cond = `${expr} LIKE CONCAT('%', LOWER(TRIM(?)), '%')`;
+    const cond = `${expr} = LOWER(TRIM(?))`;
     return injectWhere(s0, cond, [name]);
   }
 

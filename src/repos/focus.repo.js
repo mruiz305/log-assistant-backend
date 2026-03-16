@@ -2,7 +2,7 @@
 const pool = require("../infra/db.pool");
 const { FOCUS } = require("../domain/focus/focusRegistry");
 const { tokenizePersonName } = require("../utils/chatRoute.helpers");
-const { validateEntityCandidate } = require("../utils/entityCandidate");
+const { validateEntityCandidate, sanitizeEntityForSearch } = require("../utils/entityCandidate");
 
 function likeWrap(q) {
   const s = String(q || "").trim();
@@ -24,7 +24,10 @@ async function findFocusCandidates({ type, query, limit = 500 }) {
   const cfg = FOCUS[type];
   if (!cfg) throw new Error(`Invalid focus type: ${type}`);
 
-  const qRaw = String(query || "").trim();
+  let qRaw = String(query || "").trim();
+  if (!qRaw) return [];
+
+  qRaw = sanitizeEntityForSearch(qRaw);
   if (!qRaw) return [];
 
   const validation = validateEntityCandidate(qRaw, { source: "findFocusCandidates", intent: type });
@@ -53,7 +56,13 @@ async function findFocusCandidates({ type, query, limit = 500 }) {
     whereSql = `(${whereParts.join(" OR ")})`;
   } else {
     // TOKENS_AND
-    const stop = new Set(["in", "on", "at", "for", "of", "the", "and", "or", "to", "en", "de", "del", "la", "el", "y", "por", "para"]);
+    // stopwords: preposiciones + verbos + métricas que no son parte del nombre
+    // ("Tony submit" -> buscar solo "Tony"; "cases did Tony" -> solo "Tony")
+    const stop = new Set([
+      "in", "on", "at", "for", "of", "the", "and", "or", "to", "en", "de", "del", "la", "el", "y", "por", "para",
+      "submit", "submitted", "submits", "handle", "handled", "handles", "have", "has", "had", "get", "got",
+      "cases", "logs", "confirmed", "dropped", "did", "do", "does",
+    ]);
     const tokens = tokenizePersonName(q)
       .map((t) => String(t || "").trim().toLowerCase())
       .filter((t) => t && t.length >= 2 && !stop.has(t))

@@ -6,6 +6,7 @@ const { buildOwnerAnswer } = require("../../../services/answers/ownerAnswer.serv
 const { buildKpiPackSql } = require("../../../services/kpis/kpiPack.service");
 
 const { logSql, tokenizePersonName, isResolvedEntityReusable } = require("../../../utils/chatRoute.helpers");
+const { canUseSuggestedEntity } = require("../aiOrchestrator/queryPlanGuardrails");
 const { buildInsightCards } = require("../../../domain/ui/cardsAndChart.builder");
 const { buildSuggestions } = require("../../../domain/ui/suggestions.builder");
 const { noDataFoundResponse } = require("../../../utils/errors");
@@ -370,6 +371,7 @@ async function handleKpiOnly({
   userName,
   forcedPick,
   pendingContext,
+  queryPlan,
 }) {
   if (logEnabled) {
     console.log(`[${reqId}] [kpiOnly] msg="${messageWithDefaultPeriod}" hasAnyPersonSignal=${hasAnyPersonSignal}`);
@@ -439,18 +441,161 @@ async function handleKpiOnly({
     }
 
     // buildKpiPackSql: pasar solo person; attorney/office/etc los inyecta applyLockedFiltersParam
+    // queryPlan.suggested_entity: fallback when filters.person not set, with guardrails
     const filtersForKpi = {};
+    const ctxForGuard = cid ? getContext(cid) || {} : {};
+    const lastPersonKpi = ctxForGuard.lastPerson || ctxForGuard.filters?.person?.value || "";
     if (filters?.person?.locked && filters.person.value) {
       filtersForKpi.person = filters.person;
+    } else if (queryPlan?.suggested_entity && !filters?.person?.locked) {
+      const guard = canUseSuggestedEntity({
+        queryPlan,
+        lastPerson: lastPersonKpi,
+        effectiveMessage,
+        uiLang,
+        logTag: "kpiOnly",
+      });
+      if (guard.ok) {
+        filtersForKpi.person = { value: String(queryPlan.suggested_entity).trim(), locked: true, exact: false };
+        if (logEnabled) console.log(`[${reqId}] [queryPlan] kpiOnly applied suggested_entity="${queryPlan.suggested_entity}" for forced KPI`);
+      } else if (logEnabled) {
+        console.log(`[${reqId}] [queryPlan] kpiOnly rejected suggested_entity reason=${guard.reason}`);
+      }
     }
+    const personValueFinal =
+      (filters?.person?.locked && filters.person.value ? String(filters.person.value).trim() : null)
+      || (filtersForKpi.person?.value ? String(filtersForKpi.person.value).trim() : null);
+
+    const filtersForBuildKpi = {};
+    for (const k of ["office", "team", "pod", "region", "director", "attorney", "intake"]) {
+      if (filters?.[k]?.locked && filters[k].value) filtersForBuildKpi[k] = filters[k];
+    }
+
+    if (logEnabled) {
+      console.log(`[${reqId}] [kpiOnly] entity_check hasAnyPersonSignal=${hasAnyPersonSignal} personResolved=${!!personValueFinal} personValueFinal=${personValueFinal || "(null)"}`);
+    }
+
+    // Block global aggregate when entity is required but unresolved
+    if (hasAnyPersonSignal && !personValueFinal) {
+      if (logEnabled) {
+        console.log(`[${reqId}] [kpiOnly] aggregate_fallback_blocked reason=entity_required_but_unresolved`);
+      }
+      // Try disambiguation: extract person from message, show pick if multiple candidates
+      const explicitFromText = detectExplicitPersonFromText({
+        effectiveMessage,
+        messageWithDefaultPeriod,
+        uiLang,
+        logEnabled,
+        reqId,
+      });
+      if (explicitFromText && cid) {
+        const parts = tokenizePersonName(explicitFromText).slice(0, 6);
+        const reps = await chatRepo.findPersonCandidates({
+          rawPerson: explicitFromText,
+          parts,
+          limit: 500,
+        });
+        if (Array.isArray(reps) && reps.length >= 2) {
+          if (logEnabled) console.log(`[${reqId}] [kpiOnly] disambiguation_triggered candidates=${reps.length} for="${explicitFromText}"`);
+          const def = getDimension("person");
+          const prompt = uiLang === "es"
+            ? `Encontré ${reps.length} coincidencias para "${explicitFromText}". ¿Cuál es la correcta?`
+            : `I found ${reps.length} matches for "${explicitFromText}". Which one is correct?`;
+          const options = reps.map((c) => ({
+            id: String(c.submitter),
+            label: String(c.submitter),
+            sub: `${c.cnt} cases`,
+            value: String(c.submitter),
+          }));
+          setPending(cid, {
+            type: def?.pickType || "person_pick",
+            prompt,
+            options,
+            dimKey: "person",
+            originalMessage: effectiveMessage,
+            originalMode: "person_disambiguation_entity_required",
+          });
+          return {
+            ok: true,
+            answer: prompt,
+            rowCount: 0,
+            aiComment: "entity_required_disambiguation_pick",
+            userName: null,
+            chart: null,
+            pick: { type: def?.pickType || "person_pick", options },
+            suggestions: null,
+          };
+        }
+        if (Array.isArray(reps) && reps.length === 1) {
+          const chosen = String(reps[0].submitter).trim();
+          filters.person = { value: chosen, locked: true, exact: true };
+          persistContextFilters({ cid, filters, lastPerson: chosen });
+          if (logEnabled) console.log(`[${reqId}] [kpiOnly] entity_resolved single_match chosen="${chosen}"`);
+          // Continue with query - re-compute personValueFinal
+          const pvf = chosen;
+          const { sql: kpiSql2, params: kpiParams2, windowLabel: windowLabel2 } = buildKpiPackSql(messageWithDefaultPeriod, {
+            lang: uiLang,
+            filters: filtersForBuildKpi,
+          });
+          const { sql: finalSql2, params: params2 } = applyLockedFiltersParam({
+            baseSql: kpiSql2,
+            filters,
+            personValueFinal: pvf,
+            listDimensions: () => listDimensions(),
+            focusType: focusTypeNow,
+          });
+          const kpiRows2 = await sqlRepo.query(finalSql2, params2);
+          const kpiPack2 = Array.isArray(kpiRows2) && kpiRows2[0] ? kpiRows2[0] : null;
+          const grossCases2 = Number(kpiPack2?.gross_cases ?? 0);
+          if (grossCases2 === 0) {
+            const { answer: ans, suggestions: sug } = noDataFoundResponse(uiLang, {
+              personName: chosen,
+              period: windowLabel2,
+              hasRestrictiveFilters: Object.keys(filtersForBuildKpi || {}).length > 0,
+              activeFiltersText: buildActiveFiltersText(filters, windowLabel2, uiLang),
+            });
+            return { ok: true, answer: ans, rowCount: 0, aiComment: "no_data", userName, chart: null, suggestions: sug };
+          }
+          const answer2 = await buildOwnerAnswer(messageWithDefaultPeriod, finalSql2, [], {
+            kpiPack: kpiPack2, kpiWindow: windowLabel2, lang: uiLang, userName,
+          });
+          return {
+            ok: true,
+            answer: answer2,
+            cards: buildInsightCards(uiLang, { windowLabel: windowLabel2, kpiPack: kpiPack2, mode: "kpi_only_forced_how_many" }),
+            rowCount: grossCases2,
+            aiComment: "kpi_only_forced_how_many",
+            userName,
+            chart: null,
+            suggestions: buildSuggestions(effectiveMessage, uiLang, { highDropRate: Number(kpiPack2?.dropped_rate ?? 0) >= 40 }),
+            kpiWindow: windowLabel2,
+            executedSql: debug ? finalSql2 : undefined,
+          };
+        }
+      }
+      const def = getDimension("person");
+      const label = uiLang === "es" ? (def?.labelEs || "persona") : (def?.labelEn || "person");
+      const clarify = uiLang === "es"
+        ? `La consulta menciona una ${label} específica, pero no pude resolverla. ¿Puedes indicar el nombre completo?`
+        : `Your query mentions a specific ${label}, but I couldn't resolve it. Can you provide the full name?`;
+      if (logEnabled) console.log(`[${reqId}] [kpiOnly] disambiguation_clarify_returned (no candidates)`);
+      return {
+        ok: true,
+        answer: clarify,
+        rowCount: 0,
+        aiComment: "entity_required_disambiguation",
+        userName,
+        chart: null,
+        suggestions: suggestionsBase,
+      };
+    }
+
     const { sql: kpiSql, params: kpiParams, windowLabel } = buildKpiPackSql(messageWithDefaultPeriod, {
       lang: uiLang,
-      filters: filtersForKpi,
+      filters: filtersForBuildKpi,
     });
 
-    // Inyecta filtros locked (person/attorney/office...) como en otros handlers
-    const personValueFinal =
-      filters?.person?.locked && filters.person.value ? String(filters.person.value).trim() : null;
+    // Inyecta filtros locked (person/attorney/office...)
     const { sql: finalSql, params } = applyLockedFiltersParam({
       baseSql: kpiSql,
       filters,
@@ -516,18 +661,44 @@ async function handleKpiOnly({
     };
   }
 
-  // KPI-only simple
+  // KPI-only simple (exclude person from buildKpiPackSql - applyLockedFiltersParam adds it, avoids duplicate)
   if (isKpiOnlyQuestion(messageWithDefaultPeriod)) {
     const ctxNowForScope = cid ? getContext(cid) || {} : {};
     const focusTypeNow = ctxNowForScope.scopeMode === "focus" && ctxNowForScope.focus?.type ? String(ctxNowForScope.focus.type).trim() : null;
 
+    const personValueFinalSimple =
+      filters?.person?.locked && filters.person.value ? String(filters.person.value).trim() : null;
+
+    if (hasAnyPersonSignal && !personValueFinalSimple) {
+      if (logEnabled) {
+        console.log(`[${reqId}] [kpiOnly] simple_path entity_required_unresolved_blocked personValueFinal=null (no aggregate fallback)`);
+      }
+      const def = getDimension("person");
+      const label = uiLang === "es" ? (def?.labelEs || "persona") : (def?.labelEn || "person");
+      const clarify = uiLang === "es"
+        ? `La consulta menciona una ${label} específica, pero no pude resolverla. ¿Puedes indicar el nombre completo?`
+        : `Your query mentions a specific ${label}, but I couldn't resolve it. Can you provide the full name?`;
+      return {
+        ok: true,
+        answer: clarify,
+        rowCount: 0,
+        aiComment: "entity_required_disambiguation",
+        userName,
+        chart: null,
+        suggestions: suggestionsBase,
+      };
+    }
+
+    const filtersForBuildKpiSimple = {};
+    for (const k of ["office", "team", "pod", "region", "director", "attorney", "intake"]) {
+      if (filters?.[k]?.locked && filters[k].value) filtersForBuildKpiSimple[k] = filters[k];
+    }
     const { sql: kpiSql, params: kpiParams, windowLabel } = buildKpiPackSql(messageWithDefaultPeriod, {
       lang: uiLang,
-      filters,
+      filters: filtersForBuildKpiSimple,
     });
 
-    const personValueFinal =
-      filters?.person?.locked && filters.person.value ? String(filters.person.value).trim() : null;
+    const personValueFinal = personValueFinalSimple;
     const { sql: finalSql, params } = applyLockedFiltersParam({
       baseSql: kpiSql,
       filters,

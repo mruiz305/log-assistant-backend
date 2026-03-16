@@ -293,6 +293,11 @@ function buildKpiPackSql(message, opts = {}) {
     params.push(String(value || "").trim());
   }
 
+  function pushExact(colExpr, value) {
+    whereParts.push(`LOWER(TRIM(${colExpr})) = LOWER(TRIM(?))`);
+    params.push(String(value || "").trim());
+  }
+
   // aplica en orden (no importa mucho, pero consistente)
   for (const key of ["office","team","pod","region","director","attorney","intake","person"]) {
     const f = filters?.[key];
@@ -304,8 +309,11 @@ function buildKpiPackSql(message, opts = {}) {
     if (!def?.col) continue;
 
     if (key === "person") {
-      // persona SIEMPRE por submitterName/submitter (coalesce)
-      pushLike(def.col, v);
+      if (f.exact) {
+        pushExact(def.col, v);
+      } else {
+        pushLike(def.col, v);
+      }
     } else {
       pushLike(def.col, v);
     }

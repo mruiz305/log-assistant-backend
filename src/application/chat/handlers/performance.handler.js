@@ -116,6 +116,7 @@ async function handlePerformance({
   filters,
   suggestionsBase,
   userName,
+  queryPlan,
 }) {
   if (!wantsPerformance(messageWithDefaultPeriod)) return null;
   console.log(`[${reqId}] [route] performance.handler entered (wantsPerformance=true)`);

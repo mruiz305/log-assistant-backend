@@ -169,6 +169,17 @@ function extractPersonNameFromMessage(message = "") {
     if (v.length >= 2 && !/^(summarize|describe|show|can|this|last|that)$/i.test(v)) return v;
   }
 
+  // 2a-ext) "X's drop rate", "X's confirmed cases", "Maria's performance" - generic possessive
+  // Supports both ASCII apostrophe (') and typographic apostrophe (')
+  const POSSESSIVE_STOPWORDS = new Set(['it', 'that', 'what', 'there', 'this', 'who', 'how', 'the']);
+  const rxPossessive = /\b([A-Za-z][A-Za-z0-9\-]+(?:\s+[A-Za-z][A-Za-z0-9\-']+)*)['\u2019]s\s+(?:drop\s+rate|confirmed\s+cases?|performance|rate|active|problem|refer|cases?|logs?)/i;
+  m = raw.match(rxPossessive);
+  if (m && m[1]) {
+    const v = m[1].trim();
+    const vLow = v.toLowerCase();
+    if (v.length >= 2 && !POSSESSIVE_STOPWORDS.has(vLow) && !/^(summarize|describe|show|can|last)$/i.test(v)) return v;
+  }
+
   // 2b) patrones "de/para/of/for/submitter" - excluir periodos (this month, last year, etc.)
   m = q.match(/\b(de|para|of|for|submitter|submittername)\s+([a-z0-9.\-_ ]{2,50})\b/);
   if (m && m[2]) {

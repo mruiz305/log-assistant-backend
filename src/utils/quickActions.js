@@ -91,6 +91,22 @@ function getAllFiltersWhereAndParams(filters) {
   return { whereSql, params };
 }
 
+/** Mismo que getAllFiltersWhereAndParams pero excluye person (para Top reps: queremos top 10 global/por org, no solo 1 persona) */
+function getAllFiltersWhereExcludingPerson(filters) {
+  const parts = [];
+  const params = [];
+  for (const [key, col] of Object.entries(DIM_COL_MAP)) {
+    const lock = filters?.[key];
+    if (!lock?.locked || !lock?.value) continue;
+    const v = String(lock.value || "").trim();
+    if (!v) continue;
+    parts.push(`LOWER(TRIM(${col})) LIKE CONCAT('%', LOWER(TRIM(?)), '%')`);
+    params.push(v);
+  }
+  const whereSql = parts.length ? " AND " + parts.join(" AND ") : "";
+  return { whereSql, params };
+}
+
 function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
   const m = String(actionMsg || "").trim();
   const filters = opts?.filters || {};
@@ -178,27 +194,29 @@ function buildTopQuickActionSql(actionMsg, uiLang, opts = {}) {
     };
   }
 
-  // UI: Top reps -> top 10 submitters (serie)
+  // UI: Top reps -> top 10 submitters. Sin person filter para obtener top 10 real;
+  // si hay person en contexto, luego anotamos su ranking.
   if (/^top\s+reps$/i.test(m)) {
+    const { whereSql: topRepsWhere, params: topRepsParams } = getAllFiltersWhereExcludingPerson(filters);
     const sql = `
       SELECT
-        TRIM(submitterName) AS submitter,
+        TRIM(COALESCE(NULLIF(submitterName,''), submitter)) AS submitter,
         COUNT(*) AS gross_cases,
         SUM(CASE WHEN Confirmed=1 THEN 1 ELSE 0 END) AS confirmed_cases,
         ROUND(100 * SUM(CASE WHEN Confirmed=1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*),0), 2) AS confirmed_rate,
         ROUND(SUM(COALESCE(convertedValue,0)), 2) AS case_converted_value
       FROM dmLogReportDashboard
       WHERE dateCameIn >= ${monthStart} AND dateCameIn < ${monthEnd}
-        AND TRIM(submitterName) <> ''
-      ${filtersWhere}
-      GROUP BY TRIM(submitterName)
+        AND TRIM(COALESCE(NULLIF(submitterName,''), submitter)) <> ''
+      ${topRepsWhere}
+      GROUP BY TRIM(COALESCE(NULLIF(submitterName,''), submitter))
       ORDER BY gross_cases DESC, case_converted_value DESC
       LIMIT 10
     `.trim();
 
     return {
       sql,
-      params: [...filtersParams],
+      params: [...topRepsParams],
       windowLabel: uiLang === "es" ? "Mes en curso (Top reps)" : "This month (Top reps)",
       mode: "top_reps_month",
     };

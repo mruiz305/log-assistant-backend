@@ -139,6 +139,40 @@ async function handleQuickActions({
     kpiPack = sum;
   }
 
+  let cards = buildInsightCards(uiLang, {
+    windowLabel: qa.windowLabel,
+    kpiPack,
+    mode: qa.mode,
+  });
+
+  // Top reps con persona en contexto: anotar ranking (p.ej. "Tony ranks #5 of top reps")
+  const personValue = filters?.person?.locked && filters.person.value ? String(filters.person.value).trim() : null;
+  if (personValue && qa.mode === "top_reps_month" && Array.isArray(rowsQA) && rowsQA.length) {
+    const personLower = personValue.toLowerCase();
+    const firstToken = personValue.split(/\s+/)[0]?.toLowerCase() || "";
+    const rankIdx = rowsQA.findIndex((r) => {
+      const sub = String(r?.submitter || "").trim().toLowerCase();
+      if (!sub) return false;
+      return sub === personLower || sub.includes(personLower) || personLower.includes(sub) || sub.includes(firstToken);
+    });
+    const rank = rankIdx >= 0 ? rankIdx + 1 : null;
+    const es = uiLang === "es";
+    const rankCard = {
+      type: "insight",
+      icon: "🏆",
+      title: es ? "Ranking" : "Ranking",
+      text:
+        rank != null
+          ? es
+            ? `${personValue} ocupa el puesto #${rank} de ${rowsQA.length} top reps este mes.`
+            : `${personValue} ranks #${rank} of ${rowsQA.length} top reps this month.`
+          : es
+            ? `${personValue} no está en el top 10 este mes.`
+            : `${personValue} is not in the top 10 this month.`,
+    };
+    cards = [rankCard, ...(Array.isArray(cards) ? cards : [])];
+  }
+
   const legacyAnswer = await buildOwnerAnswer(
     `${msg} (${qa.windowLabel})`,
     qa.sql,
@@ -151,12 +185,6 @@ async function handleQuickActions({
       mode: "quick_action",
     }
   );
-
-  const cards = buildInsightCards(uiLang, {
-    windowLabel: qa.windowLabel,
-    kpiPack,
-    mode: qa.mode,
-  });
 
   const chartWanted = shouldShowChartPayload({ topQuickAction: true, rows: rowsQA });
   const chart = chartWanted

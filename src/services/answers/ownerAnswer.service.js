@@ -2,8 +2,9 @@
 const openai = require("../../infra/openai.client");
 
 const { sanitizeRowsForSummary } = require("../summarySanitizer.service");
-const { classifyIntent } = require("../../domain/intent/intent")
+const { classifyIntent } = require("../../domain/intent/intent");
 const { getAssistantProfile } = require("../assistantProfile");
+const { shouldUseNeedsAnalysis } = require("../../application/chat/aiOrchestrator/queryPlanGuardrails");
 
 /** Detecta cuando el usuario quiere “análisis experto” */
 function wantsExpertAnalysis(q = "") {
@@ -515,7 +516,7 @@ async function buildOwnerAnswer(question, sql, rows, meta = {}) {
   const dayOfMonth = now.getDate();
 
   const intent = classifyIntent(question);
-  const expertAnalysis = wantsExpertAnalysis(question);
+  const expertAnalysis = shouldUseNeedsAnalysis(meta?.needsAnalysis, question) || wantsExpertAnalysis(question);
 
   const answerMode = detectAnswerMode(rows, meta);
   const modeHint = answerMode === "performance" ? buildPerformanceHintFromRows(rows) : null;

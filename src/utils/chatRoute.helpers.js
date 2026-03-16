@@ -86,7 +86,10 @@ function ensurePeriodFilterStable(sql = '', msg = '') {
 
   const hasDateFilter =
     /\bdateCameIn\b/i.test(s) &&
-    (/\bbetween\b/i.test(s) || /dateCameIn\s*>=/i.test(s) || /dateCameIn\s*</i.test(s));
+    (/\bbetween\b/i.test(s) ||
+     /dateCameIn\s*>=/i.test(s) ||
+     /dateCameIn\s*</i.test(s) ||
+     /\bYEAR\s*\(\s*dateCameIn\s*\)\s*=\s*\d{4}\b/i.test(s));
 
   if (hasDateFilter) return s;
 
@@ -189,6 +192,15 @@ function mentionsPersonExplicitly(msg = "", uiLang = "en") {
   // ✅ "how is X doing" / "how is X performing" - entidad explícita que debe reemplazar la anterior
   const howIsDoing = /\bhow\s+is\s+.+?\s+(?:doing|performing)\b/i;
   const comoEsta = /\bc[oó]mo\s+est[aá]\s+.+?(?:\s+(?:haciendo|rindiendo|performando))?\b/i;
+
+  // ✅ Possessive: Tony's, Maria's, Juan's - explicit entity signal (ASCII ' and typographic ')
+  const POSSESSIVE_STOPWORDS = new Set(['it', 'that', 'what', 'there', 'this', 'who', 'he', 'she', 'we', 'they']);
+  const possessiveRx = /\b([A-Za-z][A-Za-z0-9\-]+)['\u2019]s\b/g;
+  let possMatch;
+  while ((possMatch = possessiveRx.exec(m)) !== null) {
+    const name = possMatch[1].toLowerCase();
+    if (name.length >= 2 && !POSSESSIVE_STOPWORDS.has(name)) return true;
+  }
 
   // Si no quieres depender de uiLang, evaluamos todos siempre:
   return (

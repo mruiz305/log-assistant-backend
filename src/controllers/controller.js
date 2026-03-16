@@ -45,12 +45,14 @@ const {
   extractPersonNameFromMessage,
 } = require("../utils/personRewrite");
 const { buildMiniChart } = require("../utils/miniChart");
+const { friendlyError } = require("../utils/errors");
 const {
   wantsToChange,
   wantsToClear,
   cloneFilters,
   buildSqlFixMessage,
 } = require("../utils/chatContextLocks");
+const { sanitizeEntityForSearch } = require("../utils/entityCandidate");
 
 /* DIMENSIONS */
 const { extractDimensionAndValue } = require("../domain/dimensions/dimensionExtractor");
@@ -113,17 +115,6 @@ function makeTimers(reqId) {
       return { reqId, totalMs: total, marks };
     },
   };
-}
-
-/* =========================
-   Friendly error messages
-========================= */
-function friendlyError(uiLang, reqId) {
-  const base =
-    uiLang === "es"
-      ? "Ups 😅 no pude completar eso ahora mismo. ¿Puedes intentar de nuevo? Si quieres, dime el nombre completo y el período (por ejemplo: “este mes”)."
-      : "Oops 😅 I couldn’t complete that right now. Can you try again? If you want, tell me the full name and the time window (e.g., “this month”).";
-  return base;
 }
 
 /* =========================
@@ -904,11 +895,11 @@ function injectSubmitterTokensLike(sql, personValue, opts = {}) {
   const name = String(personValue || "").trim();
   if (!s0 || !name) return { sql: s0, params: [] };
 
-  const expr = "LOWER(TRIM(submitterName))";
+  const expr = "LOWER(TRIM(COALESCE(NULLIF(submitterName,''), submitter)))";
   const exact = Boolean(opts.exact);
 
   if (exact) {
-    const cond = `${expr} LIKE CONCAT('%', LOWER(TRIM(?)), '%')`;
+    const cond = `${expr} = LOWER(TRIM(?))`;
     return injectWhere(s0, cond, [name]);
   }
 
@@ -969,7 +960,7 @@ LIMIT ${Number(limit) || 8}
 }
 
 async function findPersonCandidates(poolConn, rawPerson, limit = 8) {
-  const name = String(rawPerson || "").trim();
+  const name = sanitizeEntityForSearch(String(rawPerson || "").trim());
   if (!name) return [];
 
   const parts = tokenizePersonName(name).slice(0, 6);
@@ -1964,7 +1955,11 @@ if (wantsPerformance(messageWithDefaultPeriod)) {
     let kpiPack = null;
     let kpiWindow = null;
 
-    if (Array.isArray(rows) && rows[0] && looksLikeKpiPackRow(rows[0])) {
+    // Solo usar rows[0] si es una fila agregada real (con gross_cases). Las series mensuales
+    // (GROUP BY year, month) no tienen gross_cases y mostrarían "Gross cases: 0" erróneamente.
+    const firstRowIsAggregate = Array.isArray(rows) && rows[0] && looksLikeKpiPackRow(rows[0]) && "gross_cases" in rows[0];
+
+    if (firstRowIsAggregate) {
       kpiPack = rows[0];
       kpiWindow = uiLang === "es" ? "Según tu filtro actual" : "Based on current filters";
     } else if (looksAggregated) {

@@ -76,6 +76,10 @@ function isAnalyticalQuestion(message = "") {
     /\bhow\s+does\s+(?:he|she|they)\s+rank\b/,
     /\bhow\s+do(?:es)?\s+.\s+rank\b/,
     /\bmake\s+\d+k\b/,
+    // Preguntas analíticas conversacionales (weakness, strength)
+    /\b(?:biggest|main|primary|key|biggest)\s+(?:weakness|strength|area\s+to\s+improve)\b/,
+    /\bwhat\s+is\s+.+'s\s+(?:biggest|main)\s+(?:weakness|strength)\b/,
+    /\b(?:weakness|strength)(?:es)?\s+(?:in|for|of)\b/,
   ];
   return patterns.some((rx) => rx.test(m));
 }
@@ -91,12 +95,16 @@ function wantsLogsLookup(message = "") {
 /**
  * Preguntas analíticas de evaluación/performance basadas en logs.
  * Ej: "Based off Tony's logs for 2025 - would you consider he be a fit employee to make 80k?"
+ * También: "What is Tony's biggest weakness in 2025?" (weakness/strength sin "logs").
  * Debe ir a logsReview.handler, NO a normalAi.
  */
 function wantsLogsPerformanceReview(message = "") {
   const m = String(message || "").toLowerCase().trim();
   if (!m) return false;
-  if (!/\blogs?\b/.test(m)) return false;
+  const hasLogs = /\blogs?\b/.test(m);
+  const hasWeaknessStrength = /\b(?:biggest|main|primary|key)\s+(?:weakness|strength)\b/.test(m) ||
+    /\bwhat\s+is\s+.+[''']?s?\s+(?:biggest|main)\s+(?:weakness|strength)\b/i.test(m);
+  if (!hasLogs && !hasWeaknessStrength) return false;
   return isAnalyticalQuestion(m);
 }
 
@@ -185,6 +193,23 @@ function extractEntityFromLogsPhrase(message = "") {
   return null;
 }
 
+/**
+ * Extrae candidato a persona de preguntas weakness/strength sin "logs".
+ * Ej: "What is Tony's biggest weakness in 2025?" -> "Tony"
+ */
+function extractEntityFromWeaknessPhrase(message = "") {
+  const raw = String(message || "").trim();
+  if (!raw) return null;
+  const n = raw.replace(/['´`]/g, "'");
+  const m = n.match(/\bwhat\s+is\s+(.+?)['']?s\s+(?:biggest|main|primary|key)\s+(?:weakness|strength)\b/i)
+    || n.match(/\b(?:biggest|main)\s+(?:weakness|strength)\s+(?:of|for)\s+(.+?)(?:\s+in\s|\s+for\s|$)/i);
+  if (m && m[1]) {
+    const candidate = String(m[1]).trim().replace(/\s+/g, " ").replace(/\s+in\s+\d{4}.*$/i, "").trim();
+    if (candidate.length >= 2) return candidate;
+  }
+  return null;
+}
+
 /** Tokens que no deben usarse como candidato a persona (intro de frases logs). */
 const LOGS_INTRO_STOPWORDS = new Set(["based", "using", "from", "according"]);
 
@@ -201,6 +226,7 @@ module.exports = {
   isAnalyticalQuestion,
   extractEntityPhrase,
   extractEntityFromLogsPhrase,
+  extractEntityFromWeaknessPhrase,
   isRejectedLogsIntroToken,
   normalizeText,
   normalizeLogsEntityCandidate,

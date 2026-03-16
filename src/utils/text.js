@@ -44,12 +44,13 @@ function normalizePreset(preset) {
   return p || null;
 }
 
-/** Si NO hay periodo, fuerza "este mes/this month" */
-function ensureDefaultMonth(message = '', uiLang = 'es') {
+/** Si NO hay periodo, fuerza "este mes/this month" (o suggestedPeriod si se proporciona) */
+function ensureDefaultMonth(message = '', uiLang = 'es', suggestedPeriod = null) {
   const msg = String(message || '').trim();
   if (!msg) return msg;
   if (hasExplicitPeriod(msg, uiLang)) return msg;
-  return uiLang === 'es' ? `${msg} este mes` : `${msg} this month`;
+  const fallback = (suggestedPeriod && String(suggestedPeriod).trim()) || (uiLang === 'es' ? 'este mes' : 'this month');
+  return `${msg} ${fallback}`.trim();
 }
 
 module.exports = { normalizePreset, ensureDefaultMonth, normalizeText };

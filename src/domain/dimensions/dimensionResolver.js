@@ -2,6 +2,11 @@ const { DIMENSIONS } = require("./dimensionRegistry");
 const { FOCUS } = require("../focus/focusRegistry");
 const { findFocusCandidates } = require("../../repos/focus.repo");
 
+/** Quita posesivo inglés: "Tony's" → "Tony" para búsqueda en nexus */
+function stripPossessive(v = "") {
+  return String(v || "").trim().replace(/['\u2019\u2018]s\s*$/i, "").trim();
+}
+
 /** Mapeo: dimension key -> focus type (tabla nexus) */
 const DIM_TO_FOCUS = {
   person: "submitter",
@@ -79,7 +84,8 @@ async function resolveDimensionWithCandidates(extracted, limit = PICK_LIMIT) {
   if (!extracted?.key || !extracted?.value) return null;
 
   const key = String(extracted.key).trim();
-  const rawValue = String(extracted.value).trim();
+  let rawValue = String(extracted.value).trim();
+  if (key === "person") rawValue = stripPossessive(rawValue) || rawValue;
   const focusType = DIM_TO_FOCUS[key];
 
   if (!focusType || !FOCUS[focusType]) {

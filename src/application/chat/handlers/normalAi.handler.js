@@ -93,6 +93,7 @@ async function handleNormalAi({
   userName,
   forcedPick,
   pendingContext,
+  queryPlan,
 }) {
   // Si venimos de pick (person, dimensión o focus submitter), no re-disambiguar (evita ciclo)
   const justAppliedPick = Boolean(
@@ -383,6 +384,7 @@ async function handleNormalAi({
     kpiWindow,
     lang: uiLang,
     userName,
+    needsAnalysis: queryPlan?.needs_analysis,
   });
 
   const chartWanted = shouldShowChartPayload({ topQuickAction: false, rows });

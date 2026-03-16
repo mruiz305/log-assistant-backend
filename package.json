@@ -4,7 +4,7 @@
   "description": "",
   "main": "src/server.js",
   "scripts": {
-    "test": "node test/messageNormalizer.test.js",
+    "test": "node test/messageNormalizer.test.js && node test/isResolvedEntityReusable.test.js && node test/queryPlanGuardrails.test.js && node test/personDetect.test.js && node test/entityCandidate.test.js && node test/entityClarification.test.js && OPENAI_API_KEY=dummy node test/conversationalFollowup.test.js",
     "start": "node src/server.js",
     "dev": "node src/server.js"
   },
